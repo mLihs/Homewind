@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="de" data-webui-build="__WEBUI_HASH__">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<meta name="webui-version" content="__WEBUI_HASH__" />
+<title>Fan Control UI</title>
+<link rel="stylesheet" href="app.css?v=__WEBUI_HASH__" onload="window._cssLoaded=true">
+</head>
+<body>
+<div class="app">
+
+  <!-- Heart Rate Card -->
+  <div id="hr-card" class="card">
+    <div class="hr-bg">
+
+      <div class="hr-header"></div>
+
+      <div class="waveAnimation">
+        <svg viewBox="0 0 500 150" preserveAspectRatio="none">
+          <path
+            class="w1"
+            d="M-8.74,71.55 C289.78,255.11 349.60,4.47 505.36,34.05 L500.00,150.00 L0.00,150.00 Z"
+          />
+          <path
+            class="w2"
+            d="M-23.42,125.83 C187.63,45.89 299.38,57.73 526.80,123.86 L500.00,150.00 L0.00,150.00 Z"
+          />
+          <path
+            class="w3"
+            d="M-23.42,125.83 C172.96,-152.44 217.55,183.06 504.22,55.77 L500.00,150.00 L0.00,150.00 Z"
+          />
+        </svg>
+      </div>
+
+      <div class="hr-value-wrapper">
+        <div class="hr-value" id="hr-value">--</div>
+        <div class="hr-source">
+          <div class="hr-source-icon"></div>
+          <span id="hr-sensor-name">No HR Sensor</span>
+        </div>
+      </div>
+
+
+    </div>
+    
+
+    <div class="hr-range-row">
+      <div class="hr-range" data-type="min">
+        <div class="hr-range-label">Min Heart Rate</div>
+        <div class="hr-range-value-row">
+          <div class="hr-value-number" id="hr-min-value">80</div>
+          <div class="icon-edit"></div>
+        </div>
+      </div>
+
+      <div class="hr-range" data-type="max">
+        <div class="hr-range-label">Max Heart Rate</div>
+        <div class="hr-range-value-row">
+          <div class="hr-value-number" id="hr-max-value">160</div>
+          <div class="icon-edit"><div class="icon-edit-inner"></div></div>
+        </div>
+      </div>
+</div>
+
+  </div>
+
+  <!-- Fan Grid -->
+  <div class="fan-grid">
+
+    
+
+
+  </div>
+
+  <!-- System Settings -->
+  <div class="system-wrapper">
+    <div class="system-title">System Settings</div>
+    <div id="firmware-version" class="system-subline">Firmware: --</div>
+
+    <div class="system-actions">
+      <button id="btn-add-fan" class="btn btn-large btn-primary">Add Fan</button>
+      <button id="btn-setup-sensors" class="btn btn-large btn-primary">Setup Sensors</button>
+      <button id="btn-firmware-update" class="btn btn-large btn-secondary" type="button">Update Firmware</button>
+      <button id="btn-reset" class="btn btn-large btn-danger">Reset All Settings</button>
+    </div>
+  </div>
+
+</div>
+
+<!-- Heart Rate Picker Modal -->
+<div id="app-modal-backdrop" class="app-modal-backdrop" aria-hidden="true">
+  <div class="app-modal" role="dialog" aria-modal="true">
+    <div class="app-modal-header">
+      <div class="app-modal-header-content">
+        <div class="app-modal-icon-wrapper"></div>
+        <h2 class="app-modal-title" id="app-modal-title"></h2>
+        <div class="app-modal-subline"></div>
+      </div>
+      <button type="button" class="app-modal-close" aria-label="Close">&times;</button>
+    </div>
+
+    <div class="app-modal-body" id="app-modal-body">
+      <!-- dynamischer Inhalt wird per JS eingesetzt -->
+    </div>
+
+    <div class="app-modal-footer">
+      <button type="button" class="btn btn-regular btn-tertiary">Cancel</button>
+      <button type="button" class="btn btn-regular btn-cta">Save</button>
+    </div>
+  </div>
+</div>
+<!-- Sequential loading: JS loads AFTER CSS to reduce ESP32 heap fragmentation -->
+<script>
+(function() {
+  function loadJS() {
+    var s = document.createElement('script');
+    s.src = 'app.js?v=__WEBUI_HASH__';
+    document.body.appendChild(s);
+  }
+  if (window._cssLoaded) loadJS();
+  else document.querySelector('link[rel=stylesheet]').onload = loadJS;
+})();
+</script>
+</body>
+</html>
