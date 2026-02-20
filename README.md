@@ -233,11 +233,7 @@ The server supports ETag-based conditional requests:
 
 ## Next Steps
 
-1. Enable features one by one via `Config.h`
-2. Install optional dependencies as needed
-3. Implement business logic in stub functions
-4. Add NVS support to SettingsStore
-5. Implement WebServer routes and handlers
+1. update Zwift Click
 
 ## License
 
