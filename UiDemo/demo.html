@@ -1,0 +1,632 @@
+<!DOCTYPE html>
+<html lang="de" data-webui-build="DEMO-LOCAL">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<meta name="webui-version" content="DEMO-LOCAL" />
+<title>Homewind UI Demo (Local)</title>
+<!-- Link to CSS in parent webui_src folder -->
+<link rel="stylesheet" href="../webui_src/app.css">
+<style>
+  /* Demo Toolbar Styles */
+  .demo-toolbar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+    color: #fff;
+    padding: 8px 16px;
+    z-index: 10000;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-size: 12px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.3);
+  }
+  .demo-toolbar-title {
+    font-weight: 600;
+    color: #F00F66;
+    margin-right: 16px;
+  }
+  .demo-toolbar button {
+    background: #F00F66;
+    color: white;
+    border: none;
+    padding: 4px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 11px;
+    transition: background 0.2s;
+  }
+  .demo-toolbar button:hover {
+    background: #d10d58;
+  }
+  .demo-toolbar button.secondary {
+    background: #516682;
+  }
+  .demo-toolbar button.secondary:hover {
+    background: #3d4f66;
+  }
+  .demo-toolbar-divider {
+    width: 1px;
+    height: 24px;
+    background: rgba(255,255,255,0.2);
+    margin: 0 8px;
+  }
+  .demo-toolbar-label {
+    color: #aaa;
+    font-size: 10px;
+  }
+  /* Push content down to make room for toolbar */
+  body {
+    padding-top: 50px !important;
+  }
+  /* Console output */
+  .demo-console {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 120px;
+    background: #1a1a2e;
+    color: #0f0;
+    font-family: monospace;
+    font-size: 11px;
+    padding: 8px;
+    overflow-y: auto;
+    z-index: 9999;
+    display: none;
+  }
+  .demo-console.visible {
+    display: block;
+  }
+  .demo-console-line {
+    margin: 2px 0;
+  }
+  .demo-console-line.error { color: #f66; }
+  .demo-console-line.warn { color: #ff0; }
+  .demo-console-line.info { color: #6cf; }
+</style>
+</head>
+<body>
+
+<!-- Demo Toolbar -->
+<div class="demo-toolbar">
+  <span class="demo-toolbar-title">🏠 Homewind UI Demo</span>
+  
+  <span class="demo-toolbar-label">HR:</span>
+  <button onclick="Demo.setHR(75)">75</button>
+  <button onclick="Demo.setHR(95)">95</button>
+  <button onclick="Demo.setHR(120)">120</button>
+  <button onclick="Demo.setHR(0)">OFF</button>
+  <button id="btn-hr-sim" onclick="Demo.toggleHRSim()" class="secondary" title="Simuliert realistischen HR-Verlauf">▶ Sim</button>
+  
+  <div class="demo-toolbar-divider"></div>
+  
+  <span class="demo-toolbar-label">Sensors:</span>
+  <button onclick="Demo.connectSensor('hr')">HR ✓</button>
+  <button onclick="Demo.disconnectSensor('hr')">HR ✗</button>
+  <button onclick="Demo.connectSensor('csc')">CSC ✓</button>
+  
+  <div class="demo-toolbar-divider"></div>
+  
+  <span class="demo-toolbar-label">Fans:</span>
+  <button onclick="Demo.addFan()">+ Fan</button>
+  <button onclick="Demo.setFanState(0, 'ACTIVE')" title="Set Fan 1 to ACTIVE (green)">Active</button>
+  <button onclick="Demo.setFanState(0, 'INACTIVE')" title="Set Fan 1 to INACTIVE">Inactive</button>
+  <button onclick="Demo.setFanState(0, 'ERROR')" title="Set Fan 1 to ERROR (red)">Error</button>
+  <button onclick="Demo.toggleFan(0)" class="secondary" title="Toggle Fan 1">Toggle</button>
+  
+  <div class="demo-toolbar-divider"></div>
+  
+  <button class="secondary" onclick="Demo.toggleConsole()">Console</button>
+  <button class="secondary" onclick="Demo.resetState()">Reset</button>
+</div>
+
+<!-- Console Output -->
+<div id="demo-console" class="demo-console"></div>
+
+<!-- ========== MAIN APP CONTENT (same as index.html) ========== -->
+<div class="app">
+
+  <!-- Heart Rate Card -->
+  <div id="hr-card" class="card">
+    <div class="hr-bg">
+
+      <div class="hr-header"></div>
+
+      <div class="waveAnimation">
+        <svg viewBox="0 0 500 150" preserveAspectRatio="none">
+          <path
+            class="w1"
+            d="M-8.74,71.55 C289.78,255.11 349.60,4.47 505.36,34.05 L500.00,150.00 L0.00,150.00 Z"
+          />
+          <path
+            class="w2"
+            d="M-23.42,125.83 C187.63,45.89 299.38,57.73 526.80,123.86 L500.00,150.00 L0.00,150.00 Z"
+          />
+          <path
+            class="w3"
+            d="M-23.42,125.83 C172.96,-152.44 217.55,183.06 504.22,55.77 L500.00,150.00 L0.00,150.00 Z"
+          />
+        </svg>
+      </div>
+
+      <div class="hr-value-wrapper">
+        <div class="hr-value" id="hr-value">--</div>
+        <div class="hr-source">
+          <div class="hr-source-icon"></div>
+          <span id="hr-sensor-name">No HR Sensor</span>
+        </div>
+      </div>
+
+
+    </div>
+    
+
+    <div class="hr-range-row">
+      <div class="hr-range" data-type="min">
+        <div class="hr-range-label">Min Heart Rate</div>
+        <div class="hr-range-value-row">
+          <div class="hr-value-number" id="hr-min-value">80</div>
+          <div class="icon-edit"></div>
+        </div>
+      </div>
+
+      <div class="hr-range" data-type="max">
+        <div class="hr-range-label">Max Heart Rate</div>
+        <div class="hr-range-value-row">
+          <div class="hr-value-number" id="hr-max-value">160</div>
+          <div class="icon-edit"><div class="icon-edit-inner"></div></div>
+        </div>
+      </div>
+</div>
+
+  </div>
+
+  <!-- Fan Grid -->
+  <div class="fan-grid">
+
+    
+
+  </div>
+
+  <!-- System Settings -->
+  <div class="system-wrapper">
+    <div class="system-title">System Settings</div>
+    <div id="firmware-version" class="system-subline">Firmware: 1.4.0 (Demo)</div>
+
+    <div class="system-actions">
+      <button id="btn-add-fan" class="btn btn-large btn-primary">Add Fan</button>
+      <button id="btn-setup-sensors" class="btn btn-large btn-primary">Setup Sensors</button>
+      <button id="btn-firmware-update" class="btn btn-large btn-secondary" type="button">Update Firmware</button>
+      <button id="btn-reset" class="btn btn-large btn-danger">Reset All Settings</button>
+    </div>
+  </div>
+
+</div>
+
+<!-- Heart Rate Picker Modal -->
+<div id="app-modal-backdrop" class="app-modal-backdrop" aria-hidden="true">
+  <div class="app-modal" role="dialog" aria-modal="true">
+    <div class="app-modal-header">
+      <div class="app-modal-header-content">
+        <div class="app-modal-icon-wrapper"></div>
+        <h2 class="app-modal-title" id="app-modal-title"></h2>
+        <div class="app-modal-subline"></div>
+      </div>
+      <button type="button" class="app-modal-close" aria-label="Close">&times;</button>
+    </div>
+
+    <div class="app-modal-body" id="app-modal-body">
+      <!-- dynamischer Inhalt wird per JS eingesetzt -->
+    </div>
+
+    <div class="app-modal-footer">
+      <button type="button" class="btn btn-regular btn-tertiary">Cancel</button>
+      <button type="button" class="btn btn-regular btn-cta">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- ========== DEMO MOCK SCRIPTS (before app.js) ========== -->
+<script>
+/**
+ * Demo Mock System
+ * Provides fake WebSocket and API responses for local UI testing
+ */
+window.DEMO_MODE = true;
+
+// Demo state
+const DemoState = {
+  hr: 0,
+  hrMin: 80,
+  hrMax: 160,
+  sensors: {
+    hr: { name: 'Polar H10 Demo', connected: false, battery: 85, configured: true },
+    csc: { name: 'Wahoo Speed', connected: false, battery: 72, configured: false },
+    pwr: { name: '', connected: false, battery: 0, configured: false }
+  },
+  fans: [], // Empty - fans are added via toolbar
+  firmware: { version: '1.4.0', hasUpdate: false, remoteVersion: '1.4.1' }
+};
+
+// Console logging
+const DemoConsole = {
+  lines: [],
+  maxLines: 50,
+  
+  log(msg, type = 'log') {
+    const time = new Date().toLocaleTimeString();
+    this.lines.push({ time, msg, type });
+    if (this.lines.length > this.maxLines) this.lines.shift();
+    this.render();
+    console.log(`[Demo ${type}] ${msg}`);
+  },
+  
+  render() {
+    const el = document.getElementById('demo-console');
+    if (!el) return;
+    el.innerHTML = this.lines.map(l => 
+      `<div class="demo-console-line ${l.type}">[${l.time}] ${l.msg}</div>`
+    ).join('');
+    el.scrollTop = el.scrollHeight;
+  }
+};
+
+// Mock WebSocket
+class MockWebSocket {
+  constructor(url) {
+    this.url = url;
+    this.readyState = WebSocket.CONNECTING;
+    this.onopen = null;
+    this.onmessage = null;
+    this.onclose = null;
+    this.onerror = null;
+    
+    DemoConsole.log(`WebSocket connecting to ${url}`, 'info');
+    
+    // Simulate connection delay
+    setTimeout(() => {
+      this.readyState = WebSocket.OPEN;
+      DemoConsole.log('WebSocket connected (mock)', 'info');
+      if (this.onopen) this.onopen({ target: this });
+      
+      // Send initial state
+      this.sendMockFrame();
+    }, 100);
+  }
+  
+  send(data) {
+    DemoConsole.log(`WS Send: ${data.byteLength || data.length} bytes`, 'info');
+  }
+  
+  close() {
+    this.readyState = WebSocket.CLOSED;
+    if (this.onclose) this.onclose({ code: 1000, reason: 'Demo close' });
+  }
+  
+  sendMockFrame() {
+    // This would send binary telemetry frames
+    // For demo, we'll trigger UI updates directly via Demo.* functions
+  }
+}
+
+// Replace real WebSocket with mock
+window.RealWebSocket = window.WebSocket;
+window.WebSocket = MockWebSocket;
+
+// Mock fetch for API calls
+const originalFetch = window.fetch;
+window.fetch = function(url, options = {}) {
+  const method = options.method || 'GET';
+  DemoConsole.log(`API ${method} ${url}`, 'info');
+  
+  // Mock API responses
+  if (url.includes('/api/v1/system/info')) {
+    return Promise.resolve(new Response(JSON.stringify({
+      version: DemoState.firmware.version,
+      heap: 180000,
+      uptime: 3600
+    })));
+  }
+  
+  if (url.includes('/api/v1/sensors')) {
+    return Promise.resolve(new Response(JSON.stringify({
+      sensors: Object.entries(DemoState.sensors).map(([type, s]) => ({
+        type, name: s.name, connected: s.connected, battery: s.battery, configured: s.configured
+      }))
+    })));
+  }
+  
+  if (url.includes('/api/v1/fans')) {
+    return Promise.resolve(new Response(JSON.stringify({
+      fans: DemoState.fans
+    })));
+  }
+  
+  if (url.includes('/api/v1/action/firmware/search')) {
+    DemoConsole.log('Firmware search triggered', 'warn');
+    return Promise.resolve(new Response(JSON.stringify({ success: true })));
+  }
+  
+  // Default: return empty success
+  DemoConsole.log(`Unhandled API: ${url}`, 'warn');
+  return Promise.resolve(new Response(JSON.stringify({ success: true })));
+};
+
+// Demo control functions
+window.Demo = {
+  setHR(value) {
+    DemoState.hr = value;
+    const el = document.getElementById('hr-value');
+    if (el) el.textContent = value > 0 ? value : '--';
+    DemoConsole.log(`HR set to ${value}`);
+    
+    // Update wave animation based on HR
+    const card = document.getElementById('hr-card');
+    if (card && value > 0) {
+      card.classList.add('hr-active');
+    } else if (card) {
+      card.classList.remove('hr-active');
+    }
+  },
+  
+  connectSensor(type) {
+    if (DemoState.sensors[type]) {
+      DemoState.sensors[type].connected = true;
+      DemoState.sensors[type].configured = true;
+      DemoConsole.log(`Sensor ${type.toUpperCase()} connected`);
+      
+      if (type === 'hr') {
+        const nameEl = document.getElementById('hr-sensor-name');
+        if (nameEl) nameEl.textContent = DemoState.sensors.hr.name;
+      }
+      
+      // Trigger UI update if available
+      if (window.BLESensorManager && window.BLESensorManager.updateUI) {
+        window.BLESensorManager.updateUI();
+      }
+    }
+  },
+  
+  disconnectSensor(type) {
+    if (DemoState.sensors[type]) {
+      DemoState.sensors[type].connected = false;
+      DemoConsole.log(`Sensor ${type.toUpperCase()} disconnected`);
+      
+      if (type === 'hr') {
+        const nameEl = document.getElementById('hr-sensor-name');
+        if (nameEl) nameEl.textContent = 'No HR Sensor';
+        this.setHR(0);
+      }
+    }
+  },
+  
+  addFan() {
+    // Generate a valid 32-char hex token
+    const id = DemoState.fans.length + 1;
+    const token = this._generateToken();
+    
+    DemoState.fans.push({
+      token: token,
+      ip: `192.168.1.${100 + id}`,
+      model: id % 2 === 0 ? 'dmaker.fan.p33' : 'xiaomi.fan.p76',
+      enabled: false,
+      speed: 0,
+      power: false
+    });
+    
+    // Use fanManager API to add the tile
+    if (window.fanManager && typeof window.fanManager.addFanFromToken === 'function') {
+      const result = window.fanManager.addFanFromToken(token, {
+        participationState: 'INACTIVE'
+      });
+      if (result.success) {
+        DemoConsole.log(`Added fan #${id} (token: ${token.substring(0,8)}...)`, 'info');
+      } else {
+        DemoConsole.log(`Failed to add fan: ${result.error}`, 'error');
+      }
+    } else {
+      DemoConsole.log('fanManager not ready yet - try again after page loads', 'warn');
+    }
+  },
+  
+  _generateToken() {
+    // Generate a valid 32-character hex token
+    const chars = '0123456789abcdef';
+    let token = '';
+    for (let i = 0; i < 32; i++) {
+      token += chars[Math.floor(Math.random() * 16)];
+    }
+    return token;
+  },
+  
+  toggleFan(index = 0) {
+    // Get tokens directly from fanManager
+    if (window.fanManager && typeof window.fanManager.getTokens === 'function') {
+      const tokens = window.fanManager.getTokens();
+      if (tokens.length > index) {
+        // Toggle state (check current by looking at DOM or just alternate)
+        const currentState = DemoState.fans[index]?.power ? 'ACTIVE' : 'INACTIVE';
+        const newState = currentState === 'ACTIVE' ? 'INACTIVE' : 'ACTIVE';
+        this.setFanState(index, newState);
+      } else {
+        DemoConsole.log(`No fan at index ${index}. Add a fan first!`, 'warn');
+      }
+    }
+  },
+  
+  setFanState(index, state) {
+    // Get tokens directly from fanManager (not DemoState)
+    if (window.fanManager && typeof window.fanManager.getTokens === 'function') {
+      const tokens = window.fanManager.getTokens();
+      if (tokens.length > index) {
+        const token = tokens[index];
+        window.fanManager.setFanStatus(token, state);
+        DemoConsole.log(`Fan ${index + 1} → ${state}`, 'info');
+        
+        // Also update DemoState if fan exists there
+        if (DemoState.fans[index]) {
+          DemoState.fans[index].power = (state === 'ACTIVE');
+        }
+      } else {
+        DemoConsole.log(`No fan at index ${index}. Add a fan first!`, 'warn');
+      }
+    } else {
+      DemoConsole.log('fanManager not ready', 'error');
+    }
+  },
+  
+  toggleConsole() {
+    const el = document.getElementById('demo-console');
+    if (el) el.classList.toggle('visible');
+  },
+  
+  resetState() {
+    DemoState.hr = 0;
+    DemoState.sensors.hr.connected = false;
+    DemoState.sensors.csc.connected = false;
+    this.setHR(0);
+    document.getElementById('hr-sensor-name').textContent = 'No HR Sensor';
+    DemoConsole.log('State reset', 'warn');
+  },
+  
+  // --- HR Simulation ---
+  _hrSim: {
+    active: false,
+    interval: null,
+    phase: 'warmup',   // warmup | climbing | plateau | cooldown
+    target: 0,
+    current: 60,
+    tick: 0
+  },
+
+  toggleHRSim() {
+    const sim = this._hrSim;
+    if (sim.active) {
+      this.stopHRSim();
+    } else {
+      this.startHRSim();
+    }
+  },
+
+  startHRSim() {
+    const sim = this._hrSim;
+    sim.active = true;
+    sim.phase = 'warmup';
+    sim.current = 62 + Math.random() * 6;  // Resting ~62-68
+    sim.target = 65;
+    sim.tick = 0;
+
+    // Auto-connect HR sensor if not connected
+    if (!DemoState.sensors.hr.connected) {
+      this.connectSensor('hr');
+    }
+
+    const btn = document.getElementById('btn-hr-sim');
+    if (btn) { btn.textContent = '⏹ Sim'; btn.style.background = '#e74c3c'; }
+
+    DemoConsole.log('HR Simulation started (Warmup → Climbing → Plateau → Cooldown)', 'info');
+
+    sim.interval = setInterval(() => {
+      sim.tick++;
+
+      // Phase transitions
+      if (sim.phase === 'warmup' && sim.tick > 15) {
+        sim.phase = 'climbing';
+        sim.target = 130 + Math.random() * 30; // Target 130-160
+        DemoConsole.log(`HR Sim: Climbing → target ${Math.round(sim.target)}`, 'info');
+      } else if (sim.phase === 'climbing' && sim.current >= sim.target - 2) {
+        sim.phase = 'plateau';
+        sim.tick = 0;
+        DemoConsole.log(`HR Sim: Plateau at ~${Math.round(sim.current)}`, 'info');
+      } else if (sim.phase === 'plateau' && sim.tick > 40) {
+        sim.phase = 'cooldown';
+        sim.target = 70 + Math.random() * 10;
+        DemoConsole.log(`HR Sim: Cooldown → target ${Math.round(sim.target)}`, 'info');
+      } else if (sim.phase === 'cooldown' && sim.current <= sim.target + 2) {
+        // Restart cycle
+        sim.phase = 'warmup';
+        sim.tick = 0;
+        sim.target = 65;
+        DemoConsole.log('HR Sim: Cycle complete, restarting', 'info');
+      }
+
+      // Smooth value changes per phase
+      const jitter = (Math.random() - 0.5) * 3; // ±1.5 bpm random noise
+      switch (sim.phase) {
+        case 'warmup':
+          // Gentle rise from resting
+          sim.current += 0.3 + Math.random() * 0.4 + jitter * 0.3;
+          sim.current = Math.max(58, Math.min(sim.current, 90));
+          break;
+        case 'climbing':
+          // Steady climb with occasional spikes
+          const climbRate = 0.5 + Math.random() * 0.8;
+          sim.current += climbRate + jitter * 0.4;
+          sim.current = Math.min(sim.current, 185);
+          break;
+        case 'plateau':
+          // Fluctuate around current level
+          sim.current += jitter * 0.8;
+          sim.current = Math.max(sim.target - 10, Math.min(sim.current, sim.target + 10));
+          break;
+        case 'cooldown':
+          // Gradual decline
+          const coolRate = 0.4 + Math.random() * 0.5;
+          sim.current -= coolRate + jitter * 0.3;
+          sim.current = Math.max(55, sim.current);
+          break;
+      }
+
+      this.setHR(Math.round(sim.current));
+    }, 1000); // Update every second
+  },
+
+  stopHRSim() {
+    const sim = this._hrSim;
+    sim.active = false;
+    if (sim.interval) {
+      clearInterval(sim.interval);
+      sim.interval = null;
+    }
+    const btn = document.getElementById('btn-hr-sim');
+    if (btn) { btn.textContent = '▶ Sim'; btn.style.background = ''; }
+    DemoConsole.log('HR Simulation stopped', 'warn');
+  },
+
+  getState() {
+    return DemoState;
+  }
+};
+
+// Mock Arduino callbacks
+window.onFanAdded = function(token, options) {
+  DemoConsole.log(`[Callback] onFanAdded: ${token.substring(0,8)}... (${options?.participationState || 'INACTIVE'})`, 'info');
+};
+
+window.onFanRemoved = function(token) {
+  DemoConsole.log(`[Callback] onFanRemoved: ${token.substring(0,8)}...`, 'info');
+  // Remove from DemoState
+  DemoState.fans = DemoState.fans.filter(f => f.token !== token);
+};
+
+window.onFanParticipationChanged = function(token, newState, oldState) {
+  DemoConsole.log(`[Callback] Fan state: ${oldState} → ${newState}`, 'info');
+};
+
+// Initial log
+DemoConsole.log('Homewind UI Demo initialized', 'info');
+DemoConsole.log('Use toolbar buttons to simulate states', 'info');
+DemoConsole.log('Tip: Click "+ Fan" to add fan tiles', 'info');
+</script>
+
+<!-- Link to JS in parent webui_src folder -->
+<script src="../webui_src/app.js" defer></script>
+
+</body>
+</html>

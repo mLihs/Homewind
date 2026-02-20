@@ -1,0 +1,58 @@
+CompileFlags:
+  Add:
+    # ESP32 Arduino Core (Version 3.3.5)
+    - -I${HOME}/Library/Arduino15/packages/esp32/hardware/esp32/3.3.5/cores/esp32
+    - -I${HOME}/Library/Arduino15/packages/esp32/hardware/esp32/3.3.5/variants/esp32/include
+    - -I${HOME}/Library/Arduino15/packages/esp32/hardware/esp32/3.3.5/tools/sdk/esp32/include
+    - -I${HOME}/Library/Arduino15/packages/esp32/hardware/esp32/3.3.5/tools/sdk/esp32/include/esp32/include
+    
+    # ESP32 FreeRTOS
+    - -I${HOME}/Library/Arduino15/packages/esp32/hardware/esp32/3.3.5/tools/sdk/esp32/include/freertos/include
+    
+    # Lokale Bibliotheken im Workspace
+    - -I${HOME}/Documents/Works/Arduino/PulseSmartMiFan/libraries/BluetoothBikeSensorServer/src
+    - -I${HOME}/Documents/Works/Arduino/PulseSmartMiFan/libraries/SmartMiFanAsync/src
+    - -I${HOME}/Documents/Works/Arduino/PulseSmartMiFan/libraries/wifiMangerLite/src
+    - -I${HOME}/Documents/Works/Arduino/PulseSmartMiFan/libraries/GitFirmwareUpdate/src
+    - -I${HOME}/Documents/Works/Arduino/PulseSmartMiFan/libraries/ESPAsyncWebServer/src
+    - -I${HOME}/Documents/Works/Arduino/PulseSmartMiFan/libraries/ArduinoJson/src
+    
+    # Standard Arduino Libraries (falls installiert)
+    - -I${HOME}/Library/Arduino15/libraries/ESPAsyncWebServer/src
+    - -I${HOME}/Library/Arduino15/libraries/AsyncTCP/src
+    - -I${HOME}/Library/Arduino15/libraries/ArduinoJson/src
+    
+    # Standard C++ Library
+    - -I/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/include/c++/v1
+    - -I/usr/include
+    
+    # ESP32 Arduino Defines
+    - -DARDUINO_ESP32_DEV
+    - -DARDUINO_ARCH_ESP32
+    - -DESP32
+    - -DF_CPU=240000000L
+    - -DARDUINO=10819
+    - -DARDUINO_VARIANT=esp32
+    - -DARDUINO_BOARD=ESP32_DEV
+    - -DMBEDTLS_CONFIG_FILE=\"mbedtls/esp_config.h\"
+    
+    # Homewind-spezifische Defines (basierend auf Config.h)
+    - -DHW_DEV_MODE=1
+    - -DHW_WIFI_BACKEND_FIXED=1
+    - -DHW_WIFI_BACKEND_WML=0
+    - -DHW_ENABLE_NVS=1
+    - -DHW_ENABLE_WIFI=1
+    - -DHW_ENABLE_WEB=1
+    - -DHW_ENABLE_BLE=1
+    - -DHW_ENABLE_FANS=1
+    - -DHW_ENABLE_OTA=1
+    - -DHOMEWIND_ENABLE_WEBSOCKET=1
+    - -DHOMEWIND_ENABLE_API_ACTIONS=1
+    - -DHOMEWIND_ENABLE_API_SETTINGS=1
+    
+    # C++ Standard
+    - -std=c++17
+    
+  Remove:
+    - -m*
+    - -f*
