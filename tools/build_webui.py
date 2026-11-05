@@ -45,9 +45,9 @@ def get_mime_type(path):
 def get_cache_seconds(path):
     """Determine cache duration from file type"""
     ext = Path(path).suffix.lower()
-    # HTML files: 1 hour (may change frequently)
+    # HTML files: 0 = no-cache (revalidate via ETag); it pulls the ?v=hash assets
     if ext == '.html':
-        return 3600
+        return 0
     # CSS/JS files: 1 day (change less frequently)
     elif ext in ['.css', '.js']:
         return 86400
@@ -499,7 +499,7 @@ def build_webui(source_dir, output_dir):
                     gzipped='true' if html_use_compressed else 'false',
                     mime_type='text/html',
                     etag=html_etag,
-                    cache_seconds=3600
+                    cache_seconds=get_cache_seconds('index.html')
                 )
                 break
     

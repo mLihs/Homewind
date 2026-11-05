@@ -37,7 +37,7 @@ static const WebAsset WEB_ASSETS[] PROGMEM = {
     .gzipped = true,
     .mime_type = "text/html",
     .etag = "1501ed45",
-    .cacheSeconds = 3600
+    .cacheSeconds = 0
   },  {
     .path = "app.css",
     .data = webui_app_css_data,

@@ -218,7 +218,11 @@ void WebServerManager::handleAssetRequest(AsyncWebServerRequest* request, const 
     
     // Build Cache-Control header with manifest cacheSeconds (stack buffer, deterministic)
     char cacheControl[64];
-    snprintf(cacheControl, sizeof(cacheControl), "public, max-age=%lu", (unsigned long)cacheSeconds);
+    if (cacheSeconds == 0) {
+      snprintf(cacheControl, sizeof(cacheControl), "no-cache");
+    } else {
+      snprintf(cacheControl, sizeof(cacheControl), "public, max-age=%lu", (unsigned long)cacheSeconds);
+    }
     response->addHeader("Cache-Control", cacheControl);
     
     request->send(response);
@@ -242,7 +246,11 @@ void WebServerManager::handleAssetRequest(AsyncWebServerRequest* request, const 
   
   // Build Cache-Control header with manifest cacheSeconds (stack buffer, deterministic)
   char cacheControl[64];
-  snprintf(cacheControl, sizeof(cacheControl), "public, max-age=%lu", (unsigned long)cacheSeconds);
+  if (cacheSeconds == 0) {
+    snprintf(cacheControl, sizeof(cacheControl), "no-cache");
+  } else {
+    snprintf(cacheControl, sizeof(cacheControl), "public, max-age=%lu", (unsigned long)cacheSeconds);
+  }
   response->addHeader("Cache-Control", cacheControl);
   
   request->send(response);
