@@ -47,6 +47,8 @@ Several fans can be controlled at once. Your fan is missing? [Open an issue](../
 
 Bluetooth Low Energy heart rate, power, speed and cadence sensors. ANT+ is not supported.
 
+Homewind remembers a sensor by its Bluetooth address. Some sensors use a random address (for example CAD-BLE cadence sensors) and can change it after deep sleep. Homewind then no longer finds the sensor: search for it again in the **BLE** section.
+
 ## Build from source
 
 Only needed if you want to change the firmware. Everyone else uses the browser install above.

@@ -13,23 +13,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **BLE task model:** Web handlers only queue sensor and discovery commands; `BLERelayManager::loop()` is the only caller of the library and the only writer of sensor NVS. Library callbacks only record events; heart rate and cadence reach the fan HR adapter and the display from `loop()`.
 - **Sensor NVS:** `ble_data` format unchanged (v2); 1.5.0 configurations load as they are. A MAC saved for both HR and CSC stays with HR; the CSC entry is kept and shown as duplicate.
 - **Sensor overview:** A sensor whose MAC is already used by the other type is saved but not active and shows "Duplicate (used by other sensor)". A discovered sensor without a name is listed and stored with its MAC as name.
-- **Discovery:** `discovery/start` answers 200 once queued. A start while a discovery is still open is reported as busy in `DISCOVERY_STATUS` (the UI shows "No sensors found"). Up to 32 results (`-DBBS_MAX_DISCOVERED=32` in `tools/build.sh`).
-- **`sensor/set`:** needs `generation` and `index` from `DISCOVERY_RESULTS`; a result from an older discovery returns 409.
-- **WebSocket:** `DISCOVERY_RESULTS` (0x05) carries `generation:uint32` before the entries (older decoders misread it; the WebUI ships with the firmware). `SENSORS_SNAPSHOT` (0x02) appends one status byte per sensor (1 = duplicate), `DISCOVERY_STATUS` (0x04) appends an error byte (1 = busy). `telemetry/refresh?client_id=` sends the snapshots from the main loop.
+- **Discovery:** `discovery/start` answers 200 once queued. A start while a discovery is still open is reported as busy in `DISCOVERY_STATUS` (the UI shows "No sensors found"). Up to 15 results, as many as always fit into one `DISCOVERY_RESULTS` frame (`-DBBS_MAX_DISCOVERED=15` in `tools/build.sh`; 1.5.0 asked the library for up to 50).
+- **`sensor/set`:** needs `generation` and `index` from `DISCOVERY_RESULTS`; a result from an older discovery returns 409. The WebUI then offers a new search; other errors are shown instead of being ignored.
+- **WebSocket:** `DISCOVERY_RESULTS` (0x05) appends `generation:uint32` after the entries (older decoders ignore it). `SENSORS_SNAPSHOT` (0x02) appends one status byte per sensor (1 = duplicate), `DISCOVERY_STATUS` (0x04) appends an error byte (1 = busy). `telemetry/refresh?client_id=` sends the snapshots from the main loop.
 
 ### Changed – One-way maintenance (OTA, factory reset)
 
 - **Maintenance lifecycle:** OTA download, factory reset and manual maintenance stop fans, the HR adapter and BLE (discovery, scans, sensors) step by step within 15 s and stay stopped until reboot. A missed deadline never starts a download or an erase; the state becomes `restart_required`.
-- **`firmware/download`:** returns 202 after admission (no wait task); 409 if no update is ready or other maintenance runs. New firmware states `quiescing` and `restart_required`. Abort after admission no longer returns to idle.
+- **Behaviour change – failed OTA:** a failed or aborted update no longer returns to normal operation. Sensors and fans stay stopped and the state is `restart_required` until the device restarts (Restart button in the WebUI). 1.5.0 ended maintenance and kept running.
+- **`firmware/download`:** returns 202 after admission (no wait task); 409 if no update is ready or other maintenance runs; 500 `restart_required` if the admitted download could not be queued. New firmware states `quiescing` and `restart_required`. Abort after admission no longer returns to idle.
 - **WebUI:** shows a Restart button when the update stopped with `restart_required`.
-- **Factory reset:** now erases the Preferences namespace `homewind` (sensors, fans, HR settings) and the WiFi credentials (`hwwifi`) after BLE and fans are stopped, then reboots (before, only the reboot happened). The WebUI reports success only after the reboot, from `GET /api/v1/action/system/maintenance/status` (new).
+- **Factory reset:** now erases the Preferences namespace `homewind` (sensors, fans, HR settings) and the WiFi credentials (`hwwifi`) after BLE and fans are stopped, then reboots (before, only the reboot happened). The WebUI reports success only after the reboot, from `GET /api/v1/action/system/maintenance/status` (new). If BLE and fans cannot be stopped in time, nothing is erased and the WebUI offers a restart. With WiFi setup via the portal the device comes back as access point; the WebUI says so.
 - **`system/restart`, `factory_reset`, `wifi_reset`:** reply 202; restart and WiFi reset run from `loop()`, no `delay()` in handlers. `system/restart` is allowed during maintenance. `wifi_reset` returns 409 during maintenance.
 - **`maintenance/begin`:** manual maintenance only (`reason` ignored); `maintenance/end` returns 409.
-- **Fans:** add/remove/update/control return 409 during maintenance. Web handlers only validate and queue; `loop()` applies the change to the fan list, writes fan NVS and updates the UI (one loop pass later, no longer instant).
+- **Fans:** add/remove/update/control return 409 during maintenance. Web handlers only validate and queue; `loop()` applies the change to the fan list, writes fan NVS and updates the UI (one loop pass later, no longer instant). An applied change not yet written is saved when maintenance stops the fans.
 
 ### Removed
 
 - `FirmwareUpdateManager::beginDownloadSync`/`waitDownloadDone`/`startDownload`, the download waiter task, `ApiActions::setSettingsStore`/`setWiFiServiceWML`, public `WebSocketTelemetry::flushFrame`/`sendFrameToClient`, `FanController::removeFanCleanup` (folded into the queued remove).
+
+### Known issues (planned for 1.6.x)
+
+- Sensors with a random Bluetooth address (e.g. CAD-BLE) can change it after deep sleep and must then be searched again (README). A name fallback is planned for 1.6.x if hardware tests confirm it.
+- The WiFi portal's own `/wml` factory/WiFi reset routes still clear storage from the web task and ignore maintenance.
+- `WebSocketTelemetry` dirty flags are not atomic (`markDirty` from the web task); the review recommended fixing this now (about 5 lines), it was deferred.
+- Heart-rate settings are still written to NVS from the web task.
+- A fan change queued in the same loop pass in which maintenance starts is discarded although HTTP answered 200.
 
 ### Tests
 
