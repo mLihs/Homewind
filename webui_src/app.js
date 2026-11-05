@@ -435,10 +435,9 @@
       }
 
       case FRAME.DISCOVERY_RESULTS: {
-        // [count:uint8][generation:uint32][index:uint8][name_len:uint8][name]...
-        if (u8.length < off + 5) return;
+        // [count:uint8][index:uint8][name_len:uint8][name]...[generation:uint32]
+        if (u8.length < off + 1) return;
         const count = u8[off]; off += 1;
-        state.discovery.generation = u32(dv, off); off += 4;
         const results = [];
         for (let i = 0; i < count; i++) {
           if (off >= u8.length) break;
@@ -450,6 +449,7 @@
           // Store only index + name (backend resolves full data from cache)
           results.push({ index: index, name: nameR.str });
         }
+        if (off + 4 <= u8.length) state.discovery.generation = u32(dv, off);
         applyDiscoveryResults(results);
         return;
       }
@@ -3942,7 +3942,7 @@ window.startRebootMonitoring = function (options) {
       }
 
       AppModal.open({
-        title: "Error During Software Update",
+        title: (options && options.title) || "Error During Software Update",
         icon: "--icon-error-svg-data",
         content: `
           <div class="fw-modal">
@@ -4051,7 +4051,10 @@ window.startRebootMonitoring = function (options) {
           // Progress: WebSocket FIRMWARE_PROGRESS + HTTP status polling (P1)
         } else {
           setState(STATE.ERROR);
-          openError(result?.error || "Failed to start firmware download");
+          // 500 restart_required: maintenance already started, only a reboot ends it
+          const restartRequired = String(result?.error || "").includes("restart_required");
+          openError(restartRequired ? "The update could not be started." : (result?.error || "Failed to start firmware download"),
+                    { restartRequired });
         }
       }).catch((err) => {
         setState(STATE.ERROR);
@@ -4494,6 +4497,8 @@ window.startRebootMonitoring = function (options) {
       handleRestartComplete,
       ensureStatusPollingWhenDownloading,
       getState: () => currentState,
+      // Maintenance stopped without reboot (e.g. factory reset deadline missed)
+      showRestartRequired: (message, title) => openError(message, { restartRequired: true, title }),
     };
   })();
 
@@ -4870,12 +4875,23 @@ const BLESensorManager = (function () {
   async function saveSelectedSensor() {
     if (!selectedSensor || selectedSensor.index === undefined) return;
     if (window.ApiV1 && typeof window.ApiV1.setSensor === "function") {
+      let error = null;
       try {
         // Send only index (backend resolves full data from discovery cache)
         const result = await window.ApiV1.setSensor(selectedSensor.index);
-        if (!result.ok) {
-        }
+        if (!result.ok) error = String(result.error || "Unknown error");
       } catch (e) {
+        error = (e && e.message) ? e.message : "Network error";
+      }
+      if (error !== null) {
+        // 409 "Discovery result no longer valid": a newer discovery replaced the list
+        if (error.includes("no longer valid")) {
+          openError("Search Results Outdated", "The sensor list is out of date. Please search again.");
+        } else if (typeof window.showErrorModal === "function") {
+          window.showErrorModal({ message: "The sensor could not be saved.", reason: error },
+                                { title: "Sensor Not Saved", buttonLabel: "Close", onClose: () => openSensorOverview() });
+        }
+        return;
       }
     }
     // FIX: Don't close then reopen - just transition directly to sensor overview
@@ -4885,13 +4901,13 @@ const BLESensorManager = (function () {
 
   const renderErrorContent = () => `<div class="error-modal"><p class="modal-text-muted">Sorry no ${window.escapeHtml(getSensorTypeLabel(currentDiscoveryType))} Sensors found. Ensure sensors reachable and search again.</p></div>`;
 
-  function openError() {
+  function openError(title, message) {
     setState(STATE.ERROR);
     isSensorOverviewModalOpen = false; // FIX: Ensure overview flag is false in error state
     AppModal.open({
-      title: "No Sensors Found",
+      title: title || "No Sensors Found",
       icon: "--icon-error-svg-data",
-      content: renderErrorContent(),
+      content: message ? `<div class="error-modal"><p class="modal-text-muted">${window.escapeHtml(message)}</p></div>` : renderErrorContent(),
       buttons: [
         { type: "cancel", label: "Return", className: "btn btn-regular btn-secondary", closeOnClick: false, onClick: () => openSensorOverview() },
         { type: "save", label: "Search again", className: "btn btn-regular btn-tertiary", closeOnClick: false, onClick: () => startDiscovery(currentDiscoveryType) }
@@ -5370,6 +5386,9 @@ if (document.readyState === "loading") {
         // Accepted: the device stops sensors/fans, erases and reboots.
         // Success is only known after the reboot (maintenance status report).
         isRestarting = true;
+        const apNote = data && data.ap_mode_after_reboot
+          ? `<p class="fw-modal-notes">The WiFi credentials are erased too: the device starts in access-point mode. After reconnecting, the result is in Maintenance/Status (${MAINTENANCE_STATUS_API_ENDPOINT}).</p>`
+          : "";
         AppModal.open({
           title: "Performing Factory Reset...",
           icon: "--icon-spinner-svg-data",
@@ -5378,11 +5397,32 @@ if (document.readyState === "loading") {
               <p class="modal-text">
                 Erasing settings. The device is restarting...
               </p>
+              ${apNote}
             </div>
           `,
           buttons: [],
           actions: false,
         });
+
+        // Until the reboot: a missed maintenance deadline erases nothing and
+        // does not reboot; only a restart ends it.
+        const pollTimer = setInterval(() => {
+          if (!isRestarting) { clearInterval(pollTimer); return; }
+          fetch(MAINTENANCE_STATUS_API_ENDPOINT, { method: "GET", cache: "no-store" })
+            .then((r) => (r.ok ? r.json() : null))
+            .then((s) => {
+              if (!isRestarting || !s || s.reason !== "factory_reset") return;
+              if (s.state === "failed" || s.restart_required) {
+                isRestarting = false;
+                clearInterval(pollTimer);
+                if (window.FirmwareUpdate && typeof window.FirmwareUpdate.showRestartRequired === "function") {
+                  window.FirmwareUpdate.showRestartRequired("The factory reset could not stop BLE and fans in time. Nothing was erased.",
+                                                            "Factory Reset Failed");
+                }
+              }
+            })
+            .catch(() => {});   // device rebooting
+        }, 1000);
 
         window.startRebootMonitoring({
           isActive: () => isRestarting,

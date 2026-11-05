@@ -29,7 +29,7 @@
  *   [active:uint8][type:uint8][error:uint8]   (error appended in 1.6.0: 0=none, 1=busy)
  * 
  * DISCOVERY_RESULTS (0x05) - Delta:
- *   [count:uint8][generation:uint32][result1...resultN]   (generation since 1.6.0)
+ *   [count:uint8][result1...resultN][generation:uint32]   (generation appended in 1.6.0)
  *   Result entry: [index:uint8][name_len:uint8][name:bytes]
  * 
  * FIRMWARE_VERSION (0x08) - Delta:
@@ -891,17 +891,19 @@ size_t WebSocketTelemetry::buildDiscoveryStatus(uint8_t* buffer, size_t bufferSi
 }
 
 size_t WebSocketTelemetry::buildDiscoveryResults(uint8_t* buffer, size_t bufferSize) {
-  // Format: [count:uint8][generation:uint32 LE][result1...resultN]
+  // Format: [count:uint8][result1...resultN][generation:uint32 LE]
   // Result: [index:uint8][name_len:uint8][name:bytes]
   // Only index + name go to the UI; setSensor posts {generation, index} back and
   // the loop resolves type/MAC/addrType from the same discovery snapshot.
-  // count = entries actually written (the frame may truncate).
+  // generation is appended so pre-1.6.0 decoders stay valid.
   
   if (bufferSize < 5) {
     return 0;
   }
   
 #if HW_ENABLE_BLE
+  static_assert(1 + BLE_DISCOVERY_MAX * (2 + sizeof(HwDiscoveredSensor::name) - 1) + 4 <= MAX_FRAME_SIZE - 1,
+                "every discovery entry must fit into one DISCOVERY_RESULTS frame");
   if (!g_bleRelayManager || !g_bleRelayManager->ready()) {
     return 0;
   }
@@ -910,7 +912,6 @@ size_t WebSocketTelemetry::buildDiscoveryResults(uint8_t* buffer, size_t bufferS
   const uint8_t total = g_bleRelayManager->discoverySnapshot(generation);
   
   size_t offset = 1;
-  offset = writeUint32(buffer, offset, generation);
   uint8_t written = 0;
   
   for (uint8_t i = 0; i < total; i++) {
@@ -929,8 +930,8 @@ size_t WebSocketTelemetry::buildDiscoveryResults(uint8_t* buffer, size_t bufferS
     }
     const size_t nameLen = strnlen(name, sizeof(d.name));
     
-    if (offset + 2 + nameLen > bufferSize) {
-      break;  // Truncate - out of frame space
+    if (offset + 2 + nameLen + 4 > bufferSize) {
+      break;  // Unreachable (static_assert above)
     }
     
     offset = writeUint8(buffer, offset, i);
@@ -941,7 +942,7 @@ size_t WebSocketTelemetry::buildDiscoveryResults(uint8_t* buffer, size_t bufferS
   }
   
   writeUint8(buffer, 0, written);
-  return offset;
+  return writeUint32(buffer, offset, generation);
 #else
   // BLE not enabled - return empty results
   size_t offset = writeUint8(buffer, 0, 0);

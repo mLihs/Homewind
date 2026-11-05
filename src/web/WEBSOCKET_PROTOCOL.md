@@ -141,7 +141,7 @@ Sent only when state changes (marked dirty).
 
 **Payload:**
 ```
-[count:uint8][generation:uint32][result1...resultN]
+[count:uint8][result1...resultN][generation:uint32]
 ```
 
 **Result entry:**
@@ -149,8 +149,8 @@ Sent only when state changes (marked dirty).
 [index:uint8][name_len:uint8][name:bytes]
 ```
 
-- `count`: Number of entries in this frame (the frame truncates at 512 bytes)
-- `generation` (since 1.6.0, little-endian): identifies the discovery run. **Breaking change:** it sits before the entries, so pre-1.6.0 decoders misread this frame; the WebUI is shipped with the firmware.
+- `count`: Number of entries (at most 15: Homewind keeps 15 discovery results, which always fit into one 512-byte frame)
+- `generation` (appended in 1.6.0, little-endian, optional for decoders): identifies the discovery run. Pre-1.6.0 decoders ignore it.
 - `index`: Discovery snapshot index
 - `name_len`: Device name length
 - `name`: Device name (UTF-8, for UI display only). A device without a name is shown with its MAC (`aa:bb:cc:dd:ee:ff`), the same text that is stored when it is selected.

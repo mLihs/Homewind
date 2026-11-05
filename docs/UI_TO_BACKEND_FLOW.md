@@ -26,7 +26,7 @@ Diese Seite beschreibt den **Datenfluss vom und zum UI** für die zentralen Funk
 |--------|----------------|--------|------------------|
 | Snapshot beim Connect / alle ~30 s | `SENSORS_SNAPSHOT` (0x02) | `[count][sensor1:84]…[status…]` pro Sensor: name(64), type(1), mac(17), connected(1), battery(1); danach je 1 Status-Byte (1 = Duplikat) | Sensor-Übersicht, HR-Widget-Name, verbundene Sensoren-Liste |
 | Einzelupdate | `SENSOR_CONN_STATE` (0x03) | `[name_len][name][connected]` | Status „Connected“/„Disconnected“ pro Sensor |
-| Nach Discovery-Ende | `DISCOVERY_RESULTS` (0x05) | `[count][generation:u32][index, name_len, name]…` | Liste „Sensoren suchen“; Auswahl → Aufruf `sensor/set?generation=…&index=…` |
+| Nach Discovery-Ende | `DISCOVERY_RESULTS` (0x05) | `[count][index, name_len, name]…[generation:u32]` (höchstens 15 Einträge) | Liste „Sensoren suchen“; Auswahl → Aufruf `sensor/set?generation=…&index=…` |
 
 **Referenz:** [05_APIS.md](./05_APIS.md) (Sensor Actions, SENSORS_SNAPSHOT, SENSOR_CONN_STATE), [SENSORS_SNAPSHOT_USAGE_ANALYSIS.md](./SENSORS_SNAPSHOT_USAGE_ANALYSIS.md).
 
