@@ -93,7 +93,7 @@ Alle unter `~/Documents/Arduino/libraries/`. Getestete Versionen:
 | BluetoothBikeSensorServer | 3.0.0 (≥ 3.0.0, API `BikeSensor.h`) |
 | SmartMiFanAsync | 2.0.0 |
 | wifiMangerLite | 3.0.0 |
-| NVSUtilityLibrary | 1.0.0 |
+| NVSUtilityLibrary | 1.0.1 |
 | DebugLog | 1.1.0 |
 | GitFirmwareUpdate | 1.0.4 |
 
