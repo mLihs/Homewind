@@ -5,6 +5,7 @@ Deterministic GZIP compression and header generation.
 """
 
 import gzip
+import hashlib
 import os
 import sys
 import re
@@ -57,9 +58,8 @@ def get_cache_seconds(path):
 
 def calculate_etag(data):
     """Calculate simple ETag from data hash"""
-    # Simple hash-based ETag (not cryptographically secure, just for caching)
-    hash_val = hash(data) & 0xFFFFFFFF
-    return f'{hash_val:08x}'
+    # Content hash; Python's hash() is salted per process and not reproducible
+    return hashlib.sha256(data).hexdigest()[:8]
 
 def calculate_build_hash(assets_data):
     """
@@ -75,8 +75,7 @@ def calculate_build_hash(assets_data):
     # Combine all asset data in deterministic order
     combined = b''.join(assets_data)
     # Use same hash algorithm as ETag for consistency
-    hash_val = hash(combined) & 0xFFFFFFFF
-    return f'{hash_val:08x}'
+    return calculate_etag(combined)
 
 def compress_gzip(data):
     """Compress data with GZIP (deterministic: mtime=0)"""
