@@ -263,7 +263,7 @@ Run `tools/build_webui.py` after changing anything in `webui_src/`. The script e
 
 | Asset | Cache |
 | --- | --- |
-| `index.html` | 1 hour |
+| `index.html` | `no-cache` (revalidated by ETag) |
 | `app.css`, `app.js` | 1 day (hash in URL forces updates) |
 
 ### Troubleshooting
