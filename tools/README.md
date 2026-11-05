@@ -11,7 +11,7 @@ Compiles both firmware variants with `arduino-cli`, flashes them from the termin
 
 Touch uses the FQBN from `ARDUINO_SETUP.md` (PSRAM enabled, 16MB partition, USB CDC on boot). Basic uses the XIAO defaults: 8MB flash, 3MB APP partition, PSRAM off, USB CDC on boot.
 
-Workspace copies of `HomeWindWSAmoled`, `SmartMiFanAsync`, `wifiMangerLite`, `GitFirmwareUpdate`, `NVSUtilityLibrary` and `DebugLog` override the copies in `~/Documents/Arduino/libraries`. Other libraries (LVGL, NimBLE, ESPAsyncWebServer, …) still come from the Arduino libraries folder.
+Workspace copies of `HomeWindWSAmoled`, `NimBLE-Arduino` (patched 2.5.2), `SmartMiFanAsync`, `wifiMangerLite`, `GitFirmwareUpdate`, `NVSUtilityLibrary` and `DebugLog` override the copies in `~/Documents/Arduino/libraries`. Other libraries (LVGL, ESPAsyncWebServer, …) still come from the Arduino libraries folder.
 
 ```bash
 # Build both variants, write local manifest.json, copy bins to the website tree

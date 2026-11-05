@@ -19,6 +19,7 @@ BASIC_DIR="esp32.esp32.XIAO_ESP32S3"
 WORKSPACE_LIBS=(
   HomeWindWSAmoled
   BluetoothBikeSensorServer
+  NimBLE-Arduino
   SmartMiFanAsync
   wifiMangerLite
   GitFirmwareUpdate
