@@ -9,6 +9,7 @@
 #if HOMEWIND_ENABLE_SETTINGS
 
 #include "SettingsStore.h"
+#include <Preferences.h>
 
 SettingsStore::SettingsStore() : initialized(false) {
 }
@@ -57,20 +58,19 @@ bool SettingsStore::factoryReset() {
     return false;
   }
   
-  HW_DEBUG_PRINTLN("[SettingsStore] Factory reset: clearing all settings");
+  HW_DEBUG_PRINTLN("[SettingsStore] Factory reset: clearing namespace homewind");
   
-  // TODO: When real NVS implementation is added, clear all namespaces:
-  // - WiFi credentials namespace
-  // - User settings namespace
-  // - Fan configs namespace
-  // - Sensor configs namespace
-  // - Any cached device lists
+  // Fans, sensors and HR settings all live in "homewind"; WiFi credentials
+  // ("hwwifi") are cleared separately by the WiFi backend.
+  Preferences prefs;
+  if (!prefs.begin("homewind", false)) {
+    return false;
+  }
+  const bool ok = prefs.clear();
+  prefs.end();
   
-  // For now (stub), just log that reset was requested
-  // When NVS is implemented, use Preferences::clear() for each namespace
-  
-  HW_DEBUG_PRINTLN("[SettingsStore] Factory reset complete (stub - no persistence yet)");
-  return true;
+  HW_DEBUG_PRINTF("[SettingsStore] Factory reset %s\n", ok ? "complete" : "FAILED");
+  return ok;
 }
 
 #else // HOMEWIND_ENABLE_SETTINGS not defined

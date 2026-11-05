@@ -302,6 +302,13 @@ bool WiFiServiceWML::wifiReset() {
   return true;
 }
 
+bool WiFiServiceWML::clearCredentialsForFactoryReset() {
+  if (!storage) {
+    return false;
+  }
+  return storage->clear();
+}
+
 bool WiFiServiceWML::ready() const {
   if (!initialized || !wifiManager) {
     return false;

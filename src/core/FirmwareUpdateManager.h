@@ -13,6 +13,8 @@
 
 #include <GitFirmwareUpdate.h>
 #include <ESPAsyncWebServer.h>
+#include <atomic>
+#include "MaintenanceLifecycle.h"
 
 /**
  * @class FirmwareUpdateManager
@@ -63,39 +65,17 @@ public:
   bool requestSearch();
   
   /**
-   * Request firmware download (async - runs in worker task)
-   * Called by API endpoint /api/v1/action/firmware/download (async mode)
-   * @return true if download job enqueued
+   * Request firmware download (design §7.4): maintenance admission with
+   * READY_TO_UPDATE→QUIESCING, then the job is enqueued with zero timeout.
+   * The worker downloads only after the maintenance ACK.
+   * @return ACCEPTED/ALREADY on success; CONFLICT/NOT_READY otherwise
    */
-  bool requestDownload();
-  
-  /**
-   * Begin synchronous download and get sequence number
-   * Used by sync download endpoint to track completion
-   * @param outSeq Output parameter for sequence number
-   * @return true if download job enqueued, false if busy/invalid state
-   */
-  bool beginDownloadSync(uint32_t* outSeq);
-  
-  /**
-   * Wait for download completion (for sync download endpoint)
-   * @param seq Sequence number from beginDownloadSync()
-   * @param timeoutMs Timeout in milliseconds
-   * @param okOut Output parameter: true if download succeeded
-   * @param errOut Output parameter: error message if failed
-   * @return true if completion received, false on timeout
-   */
-  bool waitDownloadDone(uint32_t seq, uint32_t timeoutMs, bool* okOut, String* errOut);
+  hw::MaintAdmit requestDownload();
   
   /**
    * @deprecated Use requestSearch() instead
    */
   bool startSearch();
-  
-  /**
-   * @deprecated Use requestDownload() or beginDownloadSync() instead
-   */
-  bool startDownload();
   
   /**
    * Start firmware installation (async)
@@ -105,15 +85,18 @@ public:
   bool startInstall();
   
   /**
-   * Abort current update operation
+   * Abort current update operation (idempotent)
    * Called by API endpoint /api/v1/action/firmware/abort
-   * @return true if aborted
+   * QUIESCING→ABORTED by CAS; DOWNLOADING → abortUpdate(); both need a restart.
+   * Never returns the phase to IDLE once maintenance was admitted.
+   * @return true if handled
    */
   bool abort();
   
   /**
    * Get current update state for status endpoint
-   * @return State string: "idle", "searching", "downloading", "installing", "error"
+   * @return State string: "idle", "searching", "ready_to_update", "quiescing",
+   *         "downloading", "installing", "error", "restart_required"
    * @note Returns stable c-string buffer (no heap allocation)
    */
   const char* getStateString() const;
@@ -172,16 +155,18 @@ private:
     JOB_DOWNLOAD
   };
   
-  // State tracking
-  enum UpdatePhase {
-    PHASE_IDLE,
-    PHASE_SEARCHING,
-    PHASE_READY_TO_UPDATE,
-    PHASE_DOWNLOADING,
-    PHASE_INSTALLING,
-    PHASE_ERROR
+  // State tracking (values = hw::FwPhase, CAS-shared with the maintenance coordinator)
+  enum UpdatePhase : uint8_t {
+    PHASE_IDLE = static_cast<uint8_t>(hw::FwPhase::IDLE),
+    PHASE_SEARCHING = static_cast<uint8_t>(hw::FwPhase::SEARCHING),
+    PHASE_READY_TO_UPDATE = static_cast<uint8_t>(hw::FwPhase::READY_TO_UPDATE),
+    PHASE_QUIESCING = static_cast<uint8_t>(hw::FwPhase::QUIESCING),
+    PHASE_DOWNLOADING = static_cast<uint8_t>(hw::FwPhase::DOWNLOADING),
+    PHASE_INSTALLING = static_cast<uint8_t>(hw::FwPhase::INSTALLING),
+    PHASE_ERROR = static_cast<uint8_t>(hw::FwPhase::ERROR),
+    PHASE_ABORTED = static_cast<uint8_t>(hw::FwPhase::ABORTED)
   };
-  UpdatePhase _phase;
+  std::atomic<uint8_t> _phase;
   String _lastSearchResult;  // JSON string for search result
   int _lastProgress;
   String _lastErrorMsg;
@@ -194,13 +179,6 @@ private:
   
   // Thread-safe state access
   SemaphoreHandle_t _stateMutex;
-  
-  // Download completion signal (for sync download endpoint)
-  SemaphoreHandle_t _dlDoneSem;  // Binary semaphore
-  volatile bool _dlOk;            // Download success flag
-  String _dlErrorMsg;             // Download error message (protected by _stateMutex)
-  volatile uint32_t _dlSeq;        // Current download sequence number
-  volatile uint32_t _dlSeqDone;    // Completed download sequence number
   
   // Progress callback
   static void onProgress(int percent, size_t bytesRead, size_t totalBytes);

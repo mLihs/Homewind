@@ -12,6 +12,7 @@
 #include "../core/Timing.h"
 #include "../core/DebugLog.h"
 #include "../core/HeapDiagnostics.h"
+#include "../core/MaintenanceMode.h"
 
 #if HW_ENABLE_NVS
 #include "../settings/SettingsStore.h"
@@ -148,6 +149,25 @@ BLERelayManager* g_bleRelayManager = nullptr;
 // g_displayManager defined in DisplayManager.cpp
 #endif
 
+// Maintenance hooks (run from MaintenanceMode::loop() on the loop task)
+#if HW_ENABLE_NVS
+static bool clearSettingsForFactoryReset() {
+  return s_settings.factoryReset();
+}
+#endif
+
+#if HW_ENABLE_WIFI && HW_WIFI_BACKEND_WML
+static bool clearWifiForFactoryReset() {
+  return s_wifiWML.clearCredentialsForFactoryReset();
+}
+
+static void runWifiReset() {
+  if (!s_wifiWML.wifiReset()) {
+    HW_ERROR_PRINTLN("[App] WiFi reset not available");
+  }
+}
+#endif
+
 App::App()
   : initialized(false)
   , currentPhase(BootPhase::PH_CORE)
@@ -203,6 +223,19 @@ bool App::begin() {
   HeapDiagnostics::hwHeapDiagCaptureBoot();
 #endif
   
+  MaintenanceMode::captureBootReport();
+#if HW_ENABLE_NVS
+  bool (*clearSettings)() = clearSettingsForFactoryReset;
+#else
+  bool (*clearSettings)() = nullptr;
+#endif
+#if HW_ENABLE_WIFI && HW_WIFI_BACKEND_WML
+  MaintenanceMode::setFactoryResetHooks(clearSettings, clearWifiForFactoryReset);
+  MaintenanceMode::setWifiResetHook(runWifiReset);
+#else
+  MaintenanceMode::setFactoryResetHooks(clearSettings, nullptr);
+#endif
+
   bootStartTime = millis();
   phaseStartTime = bootStartTime;
   currentPhase = BootPhase::PH_CORE;
@@ -555,11 +588,6 @@ void App::initNVS() {
 #if HW_ENABLE_SERIAL_COMMANDS
     HeapDiagnostics::hwHeapDiagPrintTick("NVS");
 #endif
-    
-    // Set settings store for ApiActions factory reset
-#if HOMEWIND_ENABLE_API_ACTIONS && HOMEWIND_ENABLE_SETTINGS
-    ApiActions::setSettingsStore(settings);
-#endif
   } else {
     HW_DEBUG_PRINTLN("[App] NVS initialization failed");
     SystemState::setNVSReady(false);
@@ -657,9 +685,6 @@ void App::initWeb() {
 #if HW_WIFI_BACKEND_WML
     HW_DEBUG_PRINTLN("[App] Initializing WiFi (WML) with WebServer...");
     s_wifiWML.begin(webServer->getServer());
-#if HOMEWIND_ENABLE_API_ACTIONS
-    ApiActions::setWiFiServiceWML(&s_wifiWML);
-#endif
     // Update state based on WML status
     SystemState::setWiFiReady(s_wifiWML.ready());
     SystemState::setStationOnline(s_wifiWML.isSTA());
@@ -719,6 +744,9 @@ void App::initBLE() {
   if (currentPhase != BootPhase::PH_RUNNING) {
     return; // Not yet ready
   }
+  if (MaintenanceMode::admissionClosed()) {
+    return; // Never starts once maintenance was admitted
+  }
   static bool s_bleBeginFailed = false;
   if (s_bleBeginFailed) {
     return; // BikeSensor::begin() failed once; no retry loop until reboot
@@ -766,6 +794,9 @@ void App::initFans() {
   // Fan controller starts in background after PH_RUNNING
   if (currentPhase != BootPhase::PH_RUNNING) {
     return; // Not yet ready
+  }
+  if (MaintenanceMode::admissionClosed()) {
+    return; // Never starts once maintenance was admitted
   }
   
   HW_DEBUG_PRINTLN("[App] Initializing Fan controller (background)...");
@@ -856,6 +887,9 @@ void App::initOTA() {
   // OTA starts in background after PH_RUNNING
   if (currentPhase != BootPhase::PH_RUNNING) {
     return; // Not yet ready
+  }
+  if (MaintenanceMode::admissionClosed()) {
+    return; // Never starts once maintenance was admitted
   }
   
   HW_DEBUG_PRINTLN("[App] Initializing FirmwareUpdateManager...");
@@ -981,6 +1015,9 @@ void App::loopSubsystems() {
     telemetry->loopFlush();
   }
 #endif
+
+  // Before the BLE and fan loops (design §7.4 loop sequence)
+  MaintenanceMode::loop();
 
 #if HW_ENABLE_BLE
   if (bleManager && bleReady) {

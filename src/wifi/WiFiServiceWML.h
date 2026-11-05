@@ -91,6 +91,13 @@ public:
    */
   bool wifiReset();
 
+  /**
+   * Factory reset part: clears only the stored credentials (namespace "hwwifi").
+   * No restart; the maintenance loop reboots afterwards.
+   * @return true if the storage was cleared
+   */
+  bool clearCredentialsForFactoryReset();
+
 private:
   bool initialized;
   

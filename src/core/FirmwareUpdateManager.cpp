@@ -35,13 +35,9 @@ FirmwareUpdateManager::FirmwareUpdateManager()
   , _webServer(nullptr)
   , _jobQueue(nullptr)
   , _workerTask(nullptr)
-  , _stateMutex(nullptr)
-  , _dlDoneSem(nullptr)
-  , _dlOk(false)
-  , _dlSeq(0)
-  , _dlSeqDone(0)
   , _phase(PHASE_IDLE)
   , _lastProgress(0)
+  , _stateMutex(nullptr)
 {
   _instance = this;
   // Initialize cached buffers
@@ -60,12 +56,6 @@ FirmwareUpdateManager::~FirmwareUpdateManager() {
   if (_jobQueue) {
     vQueueDelete(_jobQueue);
     _jobQueue = nullptr;
-  }
-
-  // Cleanup download completion semaphore
-  if (_dlDoneSem) {
-    vSemaphoreDelete(_dlDoneSem);
-    _dlDoneSem = nullptr;
   }
   
   // Cleanup mutex
@@ -122,24 +112,6 @@ bool FirmwareUpdateManager::begin(const char* currentVersion, const char* github
     _fwUpdate = nullptr;
     return false;
   }
-
-  // Create download completion semaphore (used by sync download HTTP endpoint)
-  _dlDoneSem = xSemaphoreCreateBinary();
-  if (!_dlDoneSem) {
-    HW_ERROR_PRINTLN("[FirmwareUpdate] Failed to create download semaphore");
-    vQueueDelete(_jobQueue);
-    _jobQueue = nullptr;
-    vSemaphoreDelete(_stateMutex);
-    _stateMutex = nullptr;
-    delete _fwUpdate;
-    _fwUpdate = nullptr;
-    return false;
-  }
-  // Ensure clean initial state (semaphore starts empty)
-  _dlOk = false;
-  _dlSeq = 0;
-  _dlSeqDone = 0;
-  _dlErrorMsg = "";
   
   // Create worker task (pinned to core 1, priority above idle)
   // Use static allocation to avoid a large heap allocation that fragments internal heap.
@@ -158,10 +130,6 @@ bool FirmwareUpdateManager::begin(const char* currentVersion, const char* github
     HW_ERROR_PRINTLN("[FirmwareUpdate] Failed to create worker task (static)");
     vQueueDelete(_jobQueue);
     _jobQueue = nullptr;
-    if (_dlDoneSem) {
-      vSemaphoreDelete(_dlDoneSem);
-      _dlDoneSem = nullptr;
-    }
     vSemaphoreDelete(_stateMutex);
     _stateMutex = nullptr;
     delete _fwUpdate;
@@ -182,10 +150,6 @@ bool FirmwareUpdateManager::begin(const char* currentVersion, const char* github
     HW_ERROR_PRINTLN("[FirmwareUpdate] Failed to create worker task");
     vQueueDelete(_jobQueue);
     _jobQueue = nullptr;
-    if (_dlDoneSem) {
-      vSemaphoreDelete(_dlDoneSem);
-      _dlDoneSem = nullptr;
-    }
     vSemaphoreDelete(_stateMutex);
     _stateMutex = nullptr;
     delete _fwUpdate;
@@ -219,12 +183,18 @@ bool FirmwareUpdateManager::isUpdating() const {
   UpdatePhase phase = getPhase();
   return _fwUpdate->isUpdating()
       || phase == PHASE_SEARCHING
+      || phase == PHASE_QUIESCING
       || phase == PHASE_DOWNLOADING
       || phase == PHASE_INSTALLING;
 }
 
 bool FirmwareUpdateManager::requestSearch() {
   if (!_ready || !_fwUpdate || !_jobQueue) {
+    return false;
+  }
+
+  if (MaintenanceMode::admissionClosed()) {
+    HW_DEBUG_PRINTLN("[FirmwareUpdate] Maintenance admitted, search rejected");
     return false;
   }
   
@@ -255,143 +225,29 @@ bool FirmwareUpdateManager::requestSearch() {
   return true;
 }
 
-bool FirmwareUpdateManager::requestDownload() {
+hw::MaintAdmit FirmwareUpdateManager::requestDownload() {
   if (!_ready || !_fwUpdate || !_jobQueue) {
-    return false;
+    return hw::MaintAdmit::NOT_READY;
   }
   
-  // Only allow download if we're in READY_TO_UPDATE phase
-  if (getPhase() != PHASE_READY_TO_UPDATE) {
-    HW_DEBUG_PRINTF("[FirmwareUpdate] Cannot download in phase: %d\n", getPhase());
-    return false;
+  const hw::MaintAdmit admit = MaintenanceMode::requestDownload(_phase);
+  if (admit != hw::MaintAdmit::ACCEPTED) {
+    HW_DEBUG_PRINTF("[FirmwareUpdate] Download not admitted (%u) in phase %u\n",
+                    static_cast<unsigned>(admit), static_cast<unsigned>(getPhase()));
+    return admit;
   }
   
-  // Check if already busy
-  if (isUpdating()) {
-    HW_DEBUG_PRINTLN("[FirmwareUpdate] Already busy, cannot enqueue download");
-    return false;
-  }
-  
-  // Check if queue is full
-  if (uxQueueSpacesAvailable(_jobQueue) == 0) {
-    HW_DEBUG_PRINTLN("[FirmwareUpdate] Job queue full");
-    return false;
-  }
-  
-  // Enqueue download job
+  // Enqueue download job (zero timeout; no rollback on failure)
   Job job = JOB_DOWNLOAD;
   if (xQueueSend(_jobQueue, &job, 0) != pdTRUE) {
     HW_ERROR_PRINTLN("[FirmwareUpdate] Failed to enqueue download job");
-    return false;
+    setError("Download job could not be queued");
+    MaintenanceMode::failAdmission();
+    return admit;
   }
   
-  HW_DEBUG_PRINTLN("[FirmwareUpdate] Download job enqueued");
-  return true;
-}
-
-bool FirmwareUpdateManager::beginDownloadSync(uint32_t* outSeq) {
-  if (!_ready || !_fwUpdate || !_jobQueue || !_dlDoneSem) {
-    if (outSeq) *outSeq = 0;
-    return false;
-  }
-  
-  // Only allow download if we're in READY_TO_UPDATE phase
-  if (getPhase() != PHASE_READY_TO_UPDATE) {
-    HW_DEBUG_PRINTF("[FirmwareUpdate] Cannot download in phase: %d\n", getPhase());
-    if (outSeq) *outSeq = 0;
-    return false;
-  }
-  
-  // Check if already busy
-  if (isUpdating()) {
-    HW_DEBUG_PRINTLN("[FirmwareUpdate] Already busy, cannot enqueue download");
-    if (outSeq) *outSeq = 0;
-    return false;
-  }
-  
-  // Check if queue is full
-  if (uxQueueSpacesAvailable(_jobQueue) == 0) {
-    HW_DEBUG_PRINTLN("[FirmwareUpdate] Job queue full");
-    if (outSeq) *outSeq = 0;
-    return false;
-  }
-  
-  // Clear any previous completion signal (drain semaphore if already given)
-  while (xSemaphoreTake(_dlDoneSem, 0) == pdTRUE) {
-    // Drain any pending signals
-  }
-  
-  // Reset download state
-  _dlOk = false;
-  if (_stateMutex && xSemaphoreTake(_stateMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
-    _dlErrorMsg = "";
-    xSemaphoreGive(_stateMutex);
-  } else {
-    _dlErrorMsg = "";
-  }
-  
-  // Increment sequence number
-  uint32_t seq = ++_dlSeq;
-  if (outSeq) *outSeq = seq;
-  
-  // Enqueue download job
-  Job job = JOB_DOWNLOAD;
-  if (xQueueSend(_jobQueue, &job, 0) != pdTRUE) {
-    HW_ERROR_PRINTLN("[FirmwareUpdate] Failed to enqueue download job");
-    if (outSeq) *outSeq = 0;
-    return false;
-  }
-  
-  HW_DEBUG_PRINTF("[FirmwareUpdate] Download job enqueued (seq=%u)\n", seq);
-  return true;
-}
-
-bool FirmwareUpdateManager::waitDownloadDone(uint32_t seq, uint32_t timeoutMs, bool* okOut, String* errOut) {
-  if (!_dlDoneSem) {
-    if (okOut) *okOut = false;
-    if (errOut) *errOut = "Download semaphore not initialized";
-    return false;
-  }
-  
-  // Wait for semaphore with timeout
-  TickType_t ticks = (timeoutMs == 0) ? portMAX_DELAY : pdMS_TO_TICKS(timeoutMs);
-  if (xSemaphoreTake(_dlDoneSem, ticks) != pdTRUE) {
-    // Timeout
-    if (okOut) *okOut = false;
-    if (errOut) *errOut = "timeout";
-    return false;
-  }
-  
-  // Semaphore received - verify sequence number matches
-  if (_dlSeqDone != seq) {
-    // Sequence mismatch - this completion is for a different request
-    // Put semaphore back and return timeout (treat as not done yet)
-    xSemaphoreGive(_dlDoneSem);
-    if (okOut) *okOut = false;
-    if (errOut) *errOut = "sequence_mismatch";
-    return false;
-  }
-  
-  // Sequence matches - return result
-  if (okOut) *okOut = _dlOk;
-  if (errOut) {
-    if (!_dlOk) {
-      // Copy error message
-      if (_stateMutex && xSemaphoreTake(_stateMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
-        *errOut = _dlErrorMsg;
-        xSemaphoreGive(_stateMutex);
-      } else {
-        *errOut = _dlErrorMsg;
-      }
-      if (errOut->length() == 0) {
-        *errOut = "download_failed";
-      }
-    } else {
-      *errOut = "";
-    }
-  }
-  
-  return true;
+  HW_DEBUG_PRINTLN("[FirmwareUpdate] Download job enqueued (quiescing)");
+  return admit;
 }
 
 bool FirmwareUpdateManager::startSearch() {
@@ -432,54 +288,7 @@ bool FirmwareUpdateManager::startSearch() {
   return true;
 }
 
-bool FirmwareUpdateManager::startDownload() {
-  // DEPRECATED: This blocks async_tcp. Use requestDownload() instead.
-  // Enter maintenance mode before download starts (OTA hook)
-  MaintenanceMode::begin(MaintenanceReason::OTA);
-  
-  if (!_ready || !_fwUpdate) {
-    return false;
-  }
-  
-  if (getPhase() != PHASE_READY_TO_UPDATE) {
-    HW_DEBUG_PRINTF("[FirmwareUpdate] Cannot download in phase: %d\n", getPhase());
-    return false;
-  }
-  
-  setPhase(PHASE_DOWNLOADING);
-  setProgress(0);
-  setError("");
-  
-  HW_DEBUG_PRINTLN("[FirmwareUpdate] Starting download (blocking)...");
-  
-  // Get firmware URL from last search
-  String url = _fwUpdate->getFirmwareUrl();
-  if (url.length() == 0) {
-    setPhase(PHASE_ERROR);
-    setError("No firmware URL available");
-    return false;
-  }
-  
-  // downloadAndInstall() is blocking and will restart device on success
-  // If it returns, it means it failed
-  if (!_fwUpdate->downloadAndInstall(url)) {
-    setPhase(PHASE_ERROR);
-    setError(_fwUpdate->getLastErrorString());
-    HW_ERROR_PRINTF("[FirmwareUpdate] Download failed: %s\n", getLastError());
-    return false;
-  }
-  
-  // If we reach here, download succeeded and device should restart
-  // But if it didn't restart for some reason, mark as installing
-  setPhase(PHASE_INSTALLING);
-  return true;
-}
-
 bool FirmwareUpdateManager::startInstall() {
-  // Enter maintenance mode before install starts (OTA hook - safety measure)
-  // begin() is idempotent, safe to call even if already active
-  MaintenanceMode::begin(MaintenanceReason::OTA);
-  
   // Installation is handled automatically by GitFirmwareUpdate after download
   // This is called by the UI, but we just verify state
   if (getPhase() != PHASE_DOWNLOADING) {
@@ -497,6 +306,25 @@ bool FirmwareUpdateManager::abort() {
   if (!_fwUpdate) {
     return false;
   }
+
+  if (MaintenanceMode::abortQuiescing(_phase)) {
+    setError("Update aborted by user");
+    HW_DEBUG_PRINTLN("[FirmwareUpdate] Aborted while quiescing, restart required");
+    return true;
+  }
+
+  if (getPhase() == PHASE_DOWNLOADING) {
+    _fwUpdate->abortUpdate();
+    MaintenanceMode::setRestartRequired();
+    setError("Update aborted by user");
+    HW_DEBUG_PRINTLN("[FirmwareUpdate] Download aborted, restart required");
+    return true;
+  }
+
+  // After maintenance admission the phase never returns to IDLE.
+  if (MaintenanceMode::admissionClosed()) {
+    return true;
+  }
   
   _fwUpdate->abortUpdate();
   setPhase(PHASE_IDLE);
@@ -511,9 +339,20 @@ const char* FirmwareUpdateManager::getStateString() const {
   static char stateBuffer[32];
   
   UpdatePhase phase = getPhase();
+  if (MaintenanceMode::restartRequired()) {
+    strncpy(stateBuffer, "restart_required", sizeof(stateBuffer) - 1);
+    stateBuffer[sizeof(stateBuffer) - 1] = '\0';
+    return stateBuffer;
+  }
   switch (phase) {
     case PHASE_IDLE:
       strncpy(stateBuffer, "idle", sizeof(stateBuffer) - 1);
+      break;
+    case PHASE_QUIESCING:
+      strncpy(stateBuffer, "quiescing", sizeof(stateBuffer) - 1);
+      break;
+    case PHASE_ABORTED:
+      strncpy(stateBuffer, "aborted", sizeof(stateBuffer) - 1);
       break;
     case PHASE_SEARCHING:
       strncpy(stateBuffer, "searching", sizeof(stateBuffer) - 1);
@@ -779,34 +618,17 @@ void FirmwareUpdateManager::workerLoop() {
         case JOB_DOWNLOAD: {
           HW_DEBUG_PRINTLN("[FirmwareUpdate] Processing DOWNLOAD job");
           
-          // Capture current sequence number (snapshot after enqueue)
-          uint32_t seq = _dlSeq;
-          
-          // Validate phase
-          if (getPhase() != PHASE_READY_TO_UPDATE) {
-            HW_ERROR_PRINTF("[FirmwareUpdate] Cannot download in phase: %d\n", getPhase());
-            setPhase(PHASE_ERROR);
-            setError("Invalid state for download");
-            // Store error for sync HTTP response + signal completion
-            _dlOk = false;
-            if (_stateMutex && xSemaphoreTake(_stateMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
-              _dlErrorMsg = "Invalid state for download";
-              xSemaphoreGive(_stateMutex);
-            } else {
-              _dlErrorMsg = "Invalid state for download";
+          // Wait for the loop to quiesce BLE and fans (15 s budget + 2 s).
+          MaintenanceMode::waitForAck(15000 + 2000);
+          if (!MaintenanceMode::workerMayDownload(_phase)) {
+            if (getPhase() != PHASE_ABORTED) {
+              setError("Maintenance stop failed");
             }
-            _dlSeqDone = seq;
-            if (_dlDoneSem) {
-              xSemaphoreGive(_dlDoneSem);
-            }
-            MaintenanceMode::end();  // Exit maintenance mode on error
+            HW_ERROR_PRINTF("[FirmwareUpdate] No download (phase %u), restart required\n",
+                            static_cast<unsigned>(getPhase()));
             break;
           }
           
-          // Enter maintenance mode BEFORE download
-          MaintenanceMode::begin(MaintenanceReason::OTA);
-          
-          setPhase(PHASE_DOWNLOADING);
           setProgress(0);
           setError("");
           
@@ -815,23 +637,12 @@ void FirmwareUpdateManager::workerLoop() {
           if (url.length() == 0) {
             setPhase(PHASE_ERROR);
             setError("No firmware URL available");
-            _dlOk = false;
-            if (_stateMutex && xSemaphoreTake(_stateMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
-              _dlErrorMsg = "No firmware URL available";
-              xSemaphoreGive(_stateMutex);
-            } else {
-              _dlErrorMsg = "No firmware URL available";
-            }
-            _dlSeqDone = seq;
-            if (_dlDoneSem) {
-              xSemaphoreGive(_dlDoneSem);
-            }
-            MaintenanceMode::end();  // Exit maintenance mode on error
+            MaintenanceMode::setRestartRequired();
             HW_ERROR_PRINTLN("[FirmwareUpdate] No firmware URL");
             break;
           }
           
-          HW_DEBUG_PRINTF("[FirmwareUpdate] Starting download... (seq=%u)\n", seq);
+          HW_DEBUG_PRINTLN("[FirmwareUpdate] Starting download...");
           
           // Small delay before blocking operation
           delay(1);
@@ -841,38 +652,13 @@ void FirmwareUpdateManager::workerLoop() {
           if (!_fwUpdate->downloadAndInstall(url)) {
             setPhase(PHASE_ERROR);
             setError(_fwUpdate->getLastErrorString());
-            // Store download error for sync HTTP response
-            _dlOk = false;
-            if (_stateMutex && xSemaphoreTake(_stateMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
-              _dlErrorMsg = _fwUpdate->getLastErrorString();
-              xSemaphoreGive(_stateMutex);
-            } else {
-              _dlErrorMsg = _fwUpdate->getLastErrorString();
-            }
-            _dlSeqDone = seq;
-            // Signal completion (failure)
-            if (_dlDoneSem) {
-              xSemaphoreGive(_dlDoneSem);
-            }
-            MaintenanceMode::end();  // Exit maintenance mode on error
+            MaintenanceMode::setRestartRequired();
             HW_ERROR_PRINTF("[FirmwareUpdate] Download failed: %s\n", getLastError());
           } else {
             // Download succeeded - device should restart
             // If we reach here, it didn't restart for some reason
             setPhase(PHASE_INSTALLING);
             HW_DEBUG_PRINTLN("[FirmwareUpdate] Download succeeded, device should restart");
-            // Signal completion (success without reboot)
-            _dlOk = true;
-            if (_stateMutex && xSemaphoreTake(_stateMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
-              _dlErrorMsg = "";
-              xSemaphoreGive(_stateMutex);
-            } else {
-              _dlErrorMsg = "";
-            }
-            _dlSeqDone = seq;
-            if (_dlDoneSem) {
-              xSemaphoreGive(_dlDoneSem);
-            }
           }
           
           delay(1);  // Small delay after operation
@@ -890,18 +676,12 @@ void FirmwareUpdateManager::workerLoop() {
 
 // Thread-safe state access helpers
 void FirmwareUpdateManager::setPhase(UpdatePhase phase) {
-  if (_stateMutex && xSemaphoreTake(_stateMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
-    _phase = phase;
-    xSemaphoreGive(_stateMutex);
-  } else {
-    // Fallback if mutex not available (shouldn't happen after begin())
-    _phase = phase;
-  }
+  // Atomic, no mutex: the maintenance coordinator CASes the same value in a portMUX.
+  _phase.store(phase);
 }
 
 FirmwareUpdateManager::UpdatePhase FirmwareUpdateManager::getPhase() const {
-  // Volatile read is atomic for enum
-  return _phase;
+  return static_cast<UpdatePhase>(_phase.load());
 }
 
 void FirmwareUpdateManager::setProgress(int progress) {
