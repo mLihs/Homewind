@@ -119,7 +119,7 @@ write_build_stamp() {
   local display="$2"
   local include_dir="$cache/include"
   mkdir -p "$include_dir"
-  python3 - "$include_dir/homewind_build_stamp.h" "$cache/build_opt.h" "$display" "$VERSION" "$BUILD_ID" "$include_dir" <<'PY'
+  python3 - "$include_dir/homewind_build_stamp.h" "$cache.build_opt.h" "$display" "$VERSION" "$BUILD_ID" "$include_dir" <<'PY'
 import sys
 header, opt, display, version, build_id, include_dir = sys.argv[1:]
 with open(header, "w", encoding="utf-8") as fh:
@@ -134,6 +134,12 @@ with open(opt, "w", encoding="utf-8") as fh:
     # into one DISCOVERY_RESULTS frame). Applies to every translation unit.
     fh.write("-DBBS_MAX_DISCOVERED=15\n")
 PY
+  # arduino-cli does not recompile library objects when build_opt.h changes.
+  if [[ -f "$cache/build_opt.h" ]] && ! cmp -s "$cache.build_opt.h" "$cache/build_opt.h"; then
+    echo "    build_opt.h changed: discarding $cache"
+    find "$cache" -mindepth 1 -maxdepth 1 ! -name include -exec rm -rf {} +
+  fi
+  mv -f "$cache.build_opt.h" "$cache/build_opt.h"
 }
 
 library_args() {
