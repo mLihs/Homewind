@@ -112,6 +112,12 @@ public:
    * @param nowMs Current timestamp (millis())
    */
   void loop(uint32_t nowMs);
+
+  /**
+   * Maintenance stop (one-way until reboot): loop() returns immediately and
+   * issues no SmartMiFan commands afterwards.
+   */
+  void stop() { _stopped = true; }
   
   /**
    * Get current status snapshot (for UI/WS/Display)
@@ -135,6 +141,7 @@ public:
 
 private:
   bool _initialized;
+  bool _stopped;
   FanController* _fanController;
   HeartRateSettings* _hrSettings;
   

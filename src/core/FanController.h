@@ -7,6 +7,7 @@
 #define HOMEWIND_FAN_CONTROLLER_H
 
 #include <Arduino.h>
+#include <atomic>
 #include <strings.h>
 #include "../app/Config.h"
 
@@ -84,13 +85,13 @@ public:
 
   void loop();
   bool ready() const { return initialized; }
-  void stopForMaintenance();
+  void stopForMaintenance();      // non-blocking, one-way until reboot
+  void discardQueue();            // maintenance ACK/FAILED
   bool isStoppedForMaintenance() const { return _maintenanceStopped; }
 
   bool addFan(const String& token);
   bool removeFan(const String& token);
   bool removeFanFast(const String& token);
-  void removeFanCleanup(const String& token);
   bool updateFanToken(const String& oldToken, const String& newToken);
   bool setFanControlState(const String& token, bool active);
 
@@ -154,6 +155,7 @@ private:
     FanReqType type;
     uint8_t index;
     uint8_t value;
+    char token[33];   // ADD_SLOT / UPDATE_SLOT: new token; REMOVE_CLEANUP: expected token
   };
 
   enum class PostConnectStep : uint8_t {
@@ -213,7 +215,9 @@ private:
   bool _cleanupPending;
   bool _cleanupSpeedDone;
   bool _cleanupPowerDone;
+  std::atomic<bool> _nvsDirty;   // mutators mark, loop() saves
 
+  bool admissionClosed() const;
   bool loadFansFromNVS();
   bool saveFansToNVS();
   int findFanIndex(const String& token) const;
@@ -227,7 +231,7 @@ private:
   void handleEvent(const EventInfo& ev);
   void onConnectOrDiscoveryDone(const EventInfo& ev);
   void syncEnabledToLibrary();
-  bool enqueue(FanReqType type, uint8_t index, uint8_t value);
+  bool enqueue(FanReqType type, uint8_t index, uint8_t value, const char* token = nullptr);
   void drainQueue();
   void clearSeqWaiters();
   static void onLibraryEvent(const EventInfo& ev);

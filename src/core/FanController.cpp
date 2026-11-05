@@ -13,6 +13,7 @@
 #include "../core/Crc16.h"
 #include "../core/TextUtil.h"
 #include "../core/SystemState.h"
+#include "MaintenanceMode.h"
 
 #if HW_ENABLE_BLE
 #include "../core/FanHRAdapter.h"
@@ -59,6 +60,7 @@ FanController::FanController()
   , _cleanupPending(false)
   , _cleanupSpeedDone(false)
   , _cleanupPowerDone(false)
+  , _nvsDirty(false)
 {
   memset(_fans, 0, sizeof(_fans));
   memset(_lastControlStateChangeMs, 0, sizeof(_lastControlStateChangeMs));
@@ -125,6 +127,7 @@ void FanController::onLibraryEvent(const EventInfo& ev) {
 
 void FanController::loop() {
   if (!initialized || _maintenanceStopped) return;
+  if (_nvsDirty.exchange(false)) saveFansToNVS();
   drainQueue();
   SmartMiFan::update();
   if (_postConnectStep != PostConnectStep::IDLE) updatePostConnectionControl();
@@ -142,14 +145,27 @@ void FanController::loop() {
 void FanController::stopForMaintenance() {
   if (_maintenanceStopped) return;
   _maintenanceStopped = true;
-  const uint32_t start = millis();
-  while (SmartMiFan::commandPending() && (millis() - start) < 4000) {
-    SmartMiFan::update();
-    yield();
-  }
+  if (!initialized) return;
+  // No wait for pending commands: the maintenance budget is 15 s in total (§7.4).
+  // prepareForSleep() cancels the active waves itself.
   SmartMiFan::prepareForSleep(true);
   clearSeqWaiters();
   HW_DEBUG_PRINTLN("[Fans] Stopped for maintenance");
+}
+
+void FanController::discardQueue() {
+#if defined(ARDUINO_ARCH_ESP32)
+  if (_reqMux && xSemaphoreTake(_reqMux, pdMS_TO_TICKS(10)) != pdTRUE) return;
+#endif
+  _reqHead = 0;
+  _reqCount = 0;
+#if defined(ARDUINO_ARCH_ESP32)
+  if (_reqMux) xSemaphoreGive(_reqMux);
+#endif
+}
+
+bool FanController::admissionClosed() const {
+  return _maintenanceStopped || MaintenanceMode::admissionClosed();
 }
 
 void FanController::recountUsed() {
@@ -168,95 +184,43 @@ int FanController::firstFreePlace() const {
 }
 
 bool FanController::addFan(const String& token) {
+  if (admissionClosed()) return false;
   if (token.length() != 32) return false;
   if (findFanIndex(token) >= 0) return true;
-  const int place = firstFreePlace();
-  if (place < 0) return false;
-  FanConfig& fan = _fans[place];
-  fan.setToken(token);
-  fan.ip = IPAddress(0, 0, 0, 0);
-  fan.model[0] = '\0';
-  fan.enabled = true;
-  fan.used = true;
-  recountUsed();
-  if (!saveFansToNVS()) {
-    fan.clear();
-    recountUsed();
-    return false;
-  }
-  enqueue(FanReqType::ADD_SLOT, static_cast<uint8_t>(place), 0);
-  markTelemetryDirty();
-  return true;
+  if (firstFreePlace() < 0) return false;
+  return enqueue(FanReqType::ADD_SLOT, 0, 0, token.c_str());
 }
 
 bool FanController::removeFan(const String& token) {
-  if (!removeFanFast(token)) return false;
-  removeFanCleanup(token);
-  return true;
+  return removeFanFast(token);
 }
 
 bool FanController::removeFanFast(const String& token) {
+  if (admissionClosed()) return false;
   const int index = findFanIndex(token);
   if (index < 0) return false;
-  _cleanupIndex = static_cast<uint8_t>(index);
-  _fans[index].clear();
-  recountUsed();
-  markTelemetryDirty();
-#if HOMEWIND_ENABLE_WEBSOCKET
-  extern WebSocketTelemetry* g_webSocketTelemetry;
-  if (g_webSocketTelemetry) {
-    g_webSocketTelemetry->flushFrame(TelemetryFrameType::FANS_SNAPSHOT);
-  }
-#endif
-  return true;
-}
-
-void FanController::removeFanCleanup(const String& token) {
-  (void)token;
-  if (_cleanupIndex >= MAX_FANS) {
-    saveFansToNVS();
-    return;
-  }
-  enqueue(FanReqType::REMOVE_CLEANUP, _cleanupIndex, 0);
-  saveFansToNVS();
+  return enqueue(FanReqType::REMOVE_CLEANUP, static_cast<uint8_t>(index), 0, token.c_str());
 }
 
 bool FanController::updateFanToken(const String& oldToken, const String& newToken) {
+  if (admissionClosed()) return false;
   if (newToken.length() != 32) return false;
   const int index = findFanIndex(oldToken);
   if (index < 0) return false;
   if (findFanIndex(newToken) >= 0 && oldToken != newToken) return false;
-  _fans[index].setToken(newToken);
-  _fans[index].ip = IPAddress(0, 0, 0, 0);
-  _fans[index].model[0] = '\0';
-  if (!saveFansToNVS()) return false;
-  enqueue(FanReqType::UPDATE_SLOT, static_cast<uint8_t>(index), 0);
-  markTelemetryDirty();
-  return true;
+  return enqueue(FanReqType::UPDATE_SLOT, static_cast<uint8_t>(index), 0, newToken.c_str());
 }
 
 bool FanController::setFanControlState(const String& token, bool active) {
+  if (admissionClosed()) return false;
   const int nvsIndex = findFanIndex(token);
   if (nvsIndex < 0) return false;
   if (active && _autoRecoveryActive[nvsIndex] && !_autoRecoveryExhausted[nvsIndex]) return false;
-  if (!active) {
-    _autoRecoveryActive[nvsIndex] = false;
-    _autoRecoveryExhausted[nvsIndex] = false;
-    _autoRecoveryAttempts[nvsIndex] = 0;
-    _lastAutoRecoveryAttemptMs[nvsIndex] = 0;
-    _lastRecoveryDiscoveryAttemptMs[nvsIndex] = 0;
-    _unhealthyStreak[nvsIndex] = 0;
-  }
   const unsigned long now = millis();
   const unsigned long lastChange = _lastControlStateChangeMs[nvsIndex];
   if (lastChange != 0 && (now - lastChange) < FAN_CONTROL_THROTTLE_MS) return false;
   _lastControlStateChangeMs[nvsIndex] = now;
-
-  _fans[nvsIndex].enabled = active;
-  saveFansToNVS();
-  markTelemetryDirty();
-  enqueue(FanReqType::SET_ENABLED, static_cast<uint8_t>(nvsIndex), active ? 1 : 0);
-  return true;
+  return enqueue(FanReqType::SET_ENABLED, static_cast<uint8_t>(nvsIndex), active ? 1 : 0);
 }
 
 bool FanController::enqueueSetSpeed(uint8_t index, uint8_t pct) {
@@ -267,14 +231,20 @@ bool FanController::enqueueSetPower(uint8_t index, bool on) {
   return enqueue(FanReqType::SET_POWER, index, on ? 1 : 0);
 }
 
-bool FanController::enqueue(FanReqType type, uint8_t index, uint8_t value) {
+bool FanController::enqueue(FanReqType type, uint8_t index, uint8_t value, const char* token) {
+  if (admissionClosed()) return false;
 #if defined(ARDUINO_ARCH_ESP32)
   if (_reqMux && xSemaphoreTake(_reqMux, pdMS_TO_TICKS(10)) != pdTRUE) return false;
 #endif
   bool ok = false;
   if (_reqCount < REQ_DEPTH) {
     const uint8_t tail = static_cast<uint8_t>((_reqHead + _reqCount) % REQ_DEPTH);
-    _req[tail] = FanReq{type, index, value};
+    FanReq& r = _req[tail];
+    r.type = type;
+    r.index = index;
+    r.value = value;
+    strncpy(r.token, token ? token : "", sizeof(r.token) - 1);
+    r.token[sizeof(r.token) - 1] = '\0';
     _reqCount++;
     ok = true;
   }
@@ -303,6 +273,18 @@ void FanController::drainQueue() {
     const FanReq& r = local[i];
     switch (r.type) {
       case FanReqType::SET_ENABLED:
+        if (!_fans[r.index].used) break;
+        _fans[r.index].enabled = r.value != 0;
+        if (!r.value) {
+          _autoRecoveryActive[r.index] = false;
+          _autoRecoveryExhausted[r.index] = false;
+          _autoRecoveryAttempts[r.index] = 0;
+          _lastAutoRecoveryAttemptMs[r.index] = 0;
+          _lastRecoveryDiscoveryAttemptMs[r.index] = 0;
+          _unhealthyStreak[r.index] = 0;
+        }
+        _nvsDirty = true;
+        markTelemetryDirty();
         SmartMiFan::setEnabled(r.index, r.value != 0);
         if (!r.value) {
           SmartMiFan::setPower(r.index, false);
@@ -326,6 +308,11 @@ void FanController::drainQueue() {
         SmartMiFan::setPower(r.index, r.value != 0);
         break;
       case FanReqType::REMOVE_CLEANUP:
+        if (!_fans[r.index].used || !_fans[r.index].tokenEquals(r.token)) break;
+        _fans[r.index] = FanConfig();
+        recountUsed();
+        _nvsDirty = true;
+        markTelemetryDirty();
         _cleanupIndex = r.index;
         _cleanupStartMs = millis();
         _cleanupPending = true;
@@ -335,14 +322,34 @@ void FanController::drainQueue() {
         SmartMiFan::setPower(r.index, false);
         break;
       case FanReqType::ADD_SLOT: {
-        char ipBuf[16];
-        ipToBuffer(_fans[r.index].ip, ipBuf, sizeof(ipBuf));
-        SmartMiFan::add(r.index, ipBuf, _fans[r.index].token, nullptr);
-        SmartMiFan::setEnabled(r.index, true);
-        startDiscoveryForIndex(r.index, false);
+        if (findFanIndex(String(r.token)) >= 0) break;
+        const int place = firstFreePlace();
+        if (place < 0) {
+          HW_ERROR_PRINTLN("[Fans] Add dropped: no free place");
+          break;
+        }
+        FanConfig& fan = _fans[place];
+        fan.setToken(r.token);
+        fan.ip = IPAddress(0, 0, 0, 0);
+        fan.model[0] = '\0';
+        fan.enabled = true;
+        fan.used = true;
+        recountUsed();
+        _nvsDirty = true;
+        markTelemetryDirty();
+        const uint8_t slot = static_cast<uint8_t>(place);
+        SmartMiFan::add(slot, "0.0.0.0", fan.token, nullptr);
+        SmartMiFan::setEnabled(slot, true);
+        startDiscoveryForIndex(slot, false);
         break;
       }
       case FanReqType::UPDATE_SLOT:
+        if (!_fans[r.index].used) break;
+        _fans[r.index].setToken(r.token);
+        _fans[r.index].ip = IPAddress(0, 0, 0, 0);
+        _fans[r.index].model[0] = '\0';
+        _nvsDirty = true;
+        markTelemetryDirty();
         SmartMiFan::remove(r.index);
         SmartMiFan::add(r.index, "0.0.0.0", _fans[r.index].token, nullptr);
         SmartMiFan::setEnabled(r.index, _fans[r.index].enabled);

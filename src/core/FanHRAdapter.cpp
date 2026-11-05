@@ -7,6 +7,7 @@
 #include "../core/DebugLog.h"
 #include "../core/FanController.h"
 #include "../core/HeartRateSettings.h"
+#include "../core/MaintenanceMode.h"
 
 // Module-specific debug logging (gated by HW_DEBUG_FANHR)
 // These logs are very verbose (HR samples, speed calculations) and can be disabled separately
@@ -27,6 +28,7 @@
 
 FanHRAdapter::FanHRAdapter()
   : _initialized(false)
+  , _stopped(false)
   , _fanController(nullptr)
   , _hrSettings(nullptr)
   , _hrCount(0)
@@ -65,6 +67,10 @@ bool FanHRAdapter::begin(FanController* fanController, HeartRateSettings* hrSett
   
   if (!fanController || !hrSettings) {
     HW_ERROR_PRINTLN("[FanHRAdapter] Invalid parameters");
+    return false;
+  }
+
+  if (MaintenanceMode::admissionClosed()) {
     return false;
   }
   
@@ -173,7 +179,7 @@ void FanHRAdapter::onGroupDone(const EventInfo& ev) {
 }
 
 void FanHRAdapter::loop(uint32_t nowMs) {
-  if (!_initialized || !_fanController || !_fanController->ready()) {
+  if (_stopped || !_initialized || !_fanController || !_fanController->ready()) {
     return;
   }
   
