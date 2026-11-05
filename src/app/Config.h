@@ -72,7 +72,7 @@
 
 // Experimental: Two-phase BLE init
 // If enabled, Homewind will pre-initialize ONLY the NimBLE stack at PH_RUNNING entry,
-// and later start the full BLE server (BluetoothBikeSensorServerBegin) after Fans.
+// and later start the full BLE server (BikeSensor::begin()) after Fans.
 // This is intended to reduce heap fragmentation by placing NimBLE allocations earlier.
 #ifndef HW_BLE_PREINIT_NIMBLE_STACK
 #define HW_BLE_PREINIT_NIMBLE_STACK 1

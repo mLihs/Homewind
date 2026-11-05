@@ -1,11 +1,15 @@
 /**
  * @file BLERelayManager.h
- * @brief BLE Relay Manager - integrates BluetoothBikeSensorServer with Homewind
+ * @brief BLE Relay Manager - integrates BikeSensor 3.0 with Homewind
  * 
  * Manages BLE sensor connections (HR, CSC), discovery, persistence,
  * and WebSocket telemetry updates.
  * 
  * Uses deterministic struct-based NVS storage (no heap allocation for persistence).
+ *
+ * Task boundary (design §7.2, §7.3): web handlers only enqueue commands or
+ * read the _bleMux-protected snapshots. loop() is the only caller of BikeSensor,
+ * the only writer of _configuredSensors / NVS, and library callbacks only record.
  */
 
 #ifndef HOMEWIND_BLE_RELAY_MANAGER_H
@@ -17,8 +21,9 @@
 
 #if HW_ENABLE_BLE
 
-#include <BluetoothBikeSensorServer.h>
+#include <BikeSensor.h>
 #include <Preferences.h>
+#include "BleCommandState.h"
 
 // Forward declarations
 #if HOMEWIND_ENABLE_WEBSOCKET
@@ -31,189 +36,54 @@ class WebSocketTelemetry;
 static const uint8_t BLE_SENSOR_NAME_MAX = 64;
 
 /**
- * @struct SensorInfo
- * @brief Sensor information structure (fixed buffers, no heap)
+ * @brief Discovery snapshot capacity (Homewind builds with -DBBS_MAX_DISCOVERED=32)
  */
-struct SensorInfo {
+static const uint8_t BLE_DISCOVERY_MAX = 32;
+
+/**
+ * @struct HwSensorInfo
+ * @brief Configured sensor as seen by web/display (fixed buffers, no heap)
+ */
+struct HwSensorInfo {
   char name[BLE_SENSOR_NAME_MAX];  // 64 bytes
   char type[4];                     // "HR", "CSC" + null
-  char mac[18];                     // "AA:BB:CC:DD:EE:FF" + null
+  char mac[18];                     // "aa:bb:cc:dd:ee:ff" + null
   bool connected;
   int battery;                      // 0-100, or -1 if unknown
+  bool duplicate;                   // library rejected the MAC: another type holds it
   
-  SensorInfo() : connected(false), battery(-1) {
+  HwSensorInfo() : connected(false), battery(-1), duplicate(false) {
     name[0] = '\0';
     type[0] = '\0';
     mac[0] = '\0';
   }
-  
-  void setName(const char* n) {
-    if (n) {
-      strncpy(name, n, sizeof(name) - 1);
-      name[sizeof(name) - 1] = '\0';
-    } else {
-      name[0] = '\0';
-    }
-  }
-  
-  void setType(const char* t) {
-    if (t) {
-      strncpy(type, t, sizeof(type) - 1);
-      type[sizeof(type) - 1] = '\0';
-    } else {
-      type[0] = '\0';
-    }
-  }
-  
-  void setMac(const char* m) {
-    if (m) {
-      strncpy(mac, m, sizeof(mac) - 1);
-      mac[sizeof(mac) - 1] = '\0';
-    } else {
-      mac[0] = '\0';
-    }
-  }
 };
 
 /**
- * @struct DesiredSensorTarget
- * @brief Desired state for a sensor type (single-writer reconcile pattern)
- * 
- * Uses fixed-size buffers to avoid heap fragmentation on ESP32.
+ * @struct HwDiscoveredSensor
+ * @brief One record of the discovery snapshot (copy of BikeSensor::DiscoveredSensor)
  */
-struct DesiredSensorTarget {
-  bool enabled;                         // true = sensor should be active
-  SensorType type;                      // Sensor type (HR, CSC)
-  char name[BLE_SENSOR_NAME_MAX];       // Target sensor name (fixed buffer)
-  char mac[18];                          // Target sensor MAC address (fixed buffer)
-  int8_t addrType;                      // BLE address type (0=Public, 1=Random, -1=Unknown)
-  bool forceApplyNow;                   // true = controlled reconnect if connected
-  bool dirty;                           // true = needs reconcile
-  
-  DesiredSensorTarget() : enabled(false), type(static_cast<SensorType>(0)), 
-                          addrType(-1), forceApplyNow(false), dirty(false) {
-    name[0] = '\0';
-    mac[0] = '\0';
-  }
-  
-  void setName(const char* n) {
-    if (n) {
-      strncpy(name, n, BLE_SENSOR_NAME_MAX - 1);
-      name[BLE_SENSOR_NAME_MAX - 1] = '\0';
-    } else {
-      name[0] = '\0';
-    }
-  }
-  
-  void setMac(const char* m) {
-    if (m && m[0] != '\0') {
-      strncpy(mac, m, 17);
-      mac[17] = '\0';
-    } else {
-      mac[0] = '\0';
-    }
-  }
-  
-  bool nameEquals(const char* other) const {
-    if (!other) return name[0] == '\0';
-    return strcmp(name, other) == 0;
-  }
-  
-  bool macEquals(const char* other) const {
-    if (!other) return mac[0] == '\0';
-    return strcmp(mac, other) == 0;
-  }
+struct HwDiscoveredSensor {
+  char name[32];                    // "" = no name seen
+  uint8_t mac[6];
+  uint8_t addrType;                 // 0 public, 1 random
+  uint8_t typeMask;                 // advertised ∩ requested types (bit 0 HR, bit 1 CSC)
 };
 
 /**
- * @struct AppliedSensorState
- * @brief Applied (current) state for a sensor type
+ * @brief Result of a web-side enqueue (HTTP mapping in ApiActions)
  */
-struct AppliedSensorState {
-  bool added;                           // true = sensor is added to library
-  SensorType type;                      // Sensor type
-  char name[BLE_SENSOR_NAME_MAX];       // Applied sensor name
-  char mac[18];                          // Applied sensor MAC address
-  int8_t addrType;                      // Applied BLE address type (0=Public, 1=Random, -1=Unknown)
-  
-  AppliedSensorState() : added(false), type(static_cast<SensorType>(0)), addrType(-1) {
-    name[0] = '\0';
-    mac[0] = '\0';
-  }
-  
-  void setName(const char* n) {
-    if (n) {
-      strncpy(name, n, BLE_SENSOR_NAME_MAX - 1);
-      name[BLE_SENSOR_NAME_MAX - 1] = '\0';
-    } else {
-      name[0] = '\0';
-    }
-  }
-  
-  void setMac(const char* m) {
-    if (m && m[0] != '\0') {
-      strncpy(mac, m, 17);
-      mac[17] = '\0';
-    } else {
-      mac[0] = '\0';
-    }
-  }
-};
-
-/**
- * @struct DiscoveredSensor
- * @brief Discovered sensor information (fixed buffers, no heap)
- */
-struct DiscoveredSensor {
-  char name[BLE_SENSOR_NAME_MAX];  // 64 bytes
-  char type[4];                     // "HR", "CSC" + null
-  char mac[18];                     // "AA:BB:CC:DD:EE:FF" + null
-  int8_t addrType;                  // BLE address type (0=Public, 1=Random, -1=Unknown)
-  
-  DiscoveredSensor() : addrType(-1) {
-    name[0] = '\0';
-    type[0] = '\0';
-    mac[0] = '\0';
-  }
-  
-  void setName(const char* n) {
-    if (n) {
-      strncpy(name, n, sizeof(name) - 1);
-      name[sizeof(name) - 1] = '\0';
-    } else {
-      name[0] = '\0';
-    }
-  }
-  
-  void setType(const char* t) {
-    if (t) {
-      strncpy(type, t, sizeof(type) - 1);
-      type[sizeof(type) - 1] = '\0';
-    } else {
-      type[0] = '\0';
-    }
-  }
-  
-  void setMac(const char* m) {
-    if (m) {
-      strncpy(mac, m, sizeof(mac) - 1);
-      mac[sizeof(mac) - 1] = '\0';
-    } else {
-      mac[0] = '\0';
-    }
-  }
+enum class BleEnqueueResult : uint8_t {
+  ACCEPTED,    // 200
+  FULL,        // 503
+  NOT_FOUND,   // 404 (unknown sensor name)
+  STALE,       // 409 (discovery generation/index no longer valid)
+  CLOSED,      // 409 (maintenance admission closed)
 };
 
 /**
  * @class BLERelayManager
- * @brief BLE Relay Manager - integrates BluetoothBikeSensorServer with Homewind
- * 
- * Manages:
- * - BLE sensor connections (HR, CSC)
- * - Sensor discovery
- * - Sensor configuration persistence (via NVSConfigBus)
- * - WebSocket telemetry updates
- * - BLE relay server (advertising to centrals)
+ * @brief BLE Relay Manager - integrates BikeSensor 3.0 with Homewind
  */
 class BLERelayManager {
 public:
@@ -221,9 +91,8 @@ public:
   ~BLERelayManager();
   
   /**
-   * Initialize BLE relay manager
-   * @param telemetry Optional WebSocket telemetry for state updates
-   * @return true on success
+   * Initialize BLE relay manager (loop task). Loads NVS, calls BikeSensor::begin().
+   * @return false if BikeSensor::begin() failed
    */
 #if HOMEWIND_ENABLE_WEBSOCKET
   bool begin(WebSocketTelemetry* telemetry = nullptr);
@@ -232,7 +101,8 @@ public:
 #endif
   
   /**
-   * Main loop (call from App::loop())
+   * Main loop (call from App::loop()). Calls BikeSensor::update() every pass,
+   * also after maintenance ACK.
    */
   void loop();
   
@@ -241,139 +111,36 @@ public:
    */
   bool ready() const { return initialized; }
   
-  // Sensor Management API
-  /**
-   * Load configured sensors from NVS and connect them
-   */
-  bool loadConfiguredSensors();
-  
-  /**
-   * Get sensor connection state
-   * @param sensorName Sensor name/ID
-   * @param type Output: sensor type (HR, CSC)
-   * @param mac Output: MAC address
-   * @param connected Output: connection state
-   * @param battery Output: battery level (0-100, or -1 if unavailable)
-   * @return true if sensor found
-   */
-  bool getSensorConnectionState(const char* sensorName, String& type, 
-                                String& mac, bool& connected, int& battery);
-  
-  /**
-   * Get all configured sensors
-   * @param sensors Output array of sensor info
-   * @param maxSensors Maximum array size
-   * @return Number of sensors returned
-   */
-  uint8_t getConfiguredSensors(SensorInfo* sensors, uint8_t maxSensors);
-  
-  /**
-   * Add/configure a sensor
-   * @param name Sensor name
-   * @param type Sensor type ("HR", "CSC")
-   * @param mac MAC address (optional, for faster reconnection)
-   * @param forceApplyNow If true, force immediate reconnect (controlled disconnect if connected)
-   *                      If false, apply-on-disconnect policy (no forced disconnects)
-   * @return true on success
-   */
-  bool setConfiguredSensor(const char* name, const char* type, const char* mac = nullptr, int8_t addrType = -1, bool forceApplyNow = false);
-  
-  /**
-   * Remove a configured sensor
-   * @param name Sensor name
-   * @return true on success
-   */
-  bool deleteConfiguredSensor(const char* name);
-  
-  /**
-   * Connect to a sensor by name
-   * @param name Sensor name
-   * @return true on success
-   */
-  bool connectSensor(const char* name);
-  
-  /**
-   * Disconnect a sensor
-   * @param name Sensor name
-   * @return true on success
-   */
-  bool disconnectSensor(const char* name);
-  
-  /**
-   * Reload sensors from NVS and reconnect
-   */
-  bool reloadSensors();
-  
-  // Discovery API
-  /**
-   * Start sensor discovery
-   * @param type Sensor type ("HR", "CSC") or empty for all
-   * @return true on success
-   */
-  bool startDiscovery(const char* type = nullptr);
-  
-  /**
-   * Stop sensor discovery
-   */
-  bool stopDiscovery();
-  
-  /**
-   * Check if discovery is active
-   */
-  bool isDiscoveryActive() const { return _discoveryActive; }
-  
-  /**
-   * Get discovery results
-   * @param results Output array
-   * @param maxResults Maximum array size
-   * @return Number of results
-   */
-  uint8_t getDiscoveryResults(DiscoveredSensor* results, uint8_t maxResults);
-  
-  // Server Control
-  /**
-   * Pause BLE relay server (stop advertising)
-   */
-  bool pauseServer();
-  
-  /**
-   * Resume BLE relay server (start advertising)
-   */
-  bool resumeServer();
-  
-  /**
-   * Check if server is paused
-   */
+  // ---- Any task: snapshot readers ----------------------------------------
+  uint8_t getConfiguredSensors(HwSensorInfo* sensors, uint8_t maxSensors);
+  bool isDiscoveryActive();
+  uint8_t discoveryError();          // 0 none, 1 busy (last START refused)
+  uint8_t discoverySnapshot(uint32_t& generation);
+  bool discoveredSensor(uint8_t index, HwDiscoveredSensor& out);
+
+  // ---- Any task: commands, applied in loop() ------------------------------
+  BleEnqueueResult enqueueSetFromDiscovery(uint32_t generation, uint8_t index, bool force);
+  BleEnqueueResult enqueueDelete(const char* name);
+  BleEnqueueResult enqueueConnect(const char* name);
+  BleEnqueueResult enqueueDisconnect(const char* name);
+  BleEnqueueResult enqueueReload();
+  BleEnqueueResult requestDiscoveryStart(uint8_t typeMask);
+  BleEnqueueResult requestDiscoveryStop();
+  BleEnqueueResult requestServerPaused(bool paused);
+
+  // ---- Loop task ----------------------------------------------------------
   bool isServerPaused() const { return _serverPaused; }
-  
-  /**
-   * Get number of configured sensors
-   */
   uint8_t getConfiguredSensorCount() const { return _sensorCount; }
-  
-  /**
-   * Get number of connected sensors
-   */
   uint8_t getConnectedSensorCount() const { return _connectedCount; }
-  
-  /**
-   * Get number of discovery results (from last discovery)
-   */
   uint8_t getLastDiscoveryCount() const { return _lastDiscoveryCount; }
-  
-  // Maintenance Mode
-  /**
-   * Stop BLE operations for maintenance mode
-   * 
-   * Disconnects all connected sensors/clients, stops advertising,
-   * and stops notifications/queues/workers.
-   * Idempotent - safe to call multiple times.
-   */
-  void stopForMaintenance();
-  
-  /**
-   * Check if stopped for maintenance
-   */
+  bool lastHeartRate(uint16_t& bpm) const { bpm = _hrBpm; return _hrValid; }
+
+  // ---- Maintenance (loop task, called from MaintenanceMode::loop) --------
+  bool quiesceForMaintenance();      // true: a discovery was open
+  bool maintenanceDiscoveryDone() const { return _maintDiscoveryDone; }
+  bool maintenanceQuiesced();
+  bool removeSensorsForMaintenance();
+  void stopForMaintenance();         // discard queues; afterwards loop() only calls update()
   bool isStoppedForMaintenance() const { return _maintenanceStopped; }
 
 private:
@@ -417,32 +184,13 @@ private:
   WebSocketTelemetry* _telemetry;
 #endif
   
-  // Sensor configuration cache (fixed buffers, no heap fragmentation)
+  // Sensor configuration cache (fixed buffers, no heap fragmentation). Loop task only.
   struct SensorConfig {
     char name[BLE_SENSOR_NAME_MAX];  // 64 bytes
     char type[4];                     // "HR", "CSC" + null
-    char mac[18];                     // "AA:BB:CC:DD:EE:FF" + null
+    char mac[18];                     // "aa:bb:cc:dd:ee:ff" + null
     int8_t addrType;                  // BLE address type (0=Public, 1=Random, -1=Unknown)
-    SensorType sensorType;            // Converted from string
-    
-    SensorConfig() : addrType(-1), sensorType(static_cast<SensorType>(0)) {
-      name[0] = '\0';
-      type[0] = '\0';
-      mac[0] = '\0';
-    }
-    
-    void setName(const char* n) {
-      if (n) { strncpy(name, n, sizeof(name) - 1); name[sizeof(name) - 1] = '\0'; }
-      else { name[0] = '\0'; }
-    }
-    void setType(const char* t) {
-      if (t) { strncpy(type, t, sizeof(type) - 1); type[sizeof(type) - 1] = '\0'; }
-      else { type[0] = '\0'; }
-    }
-    void setMac(const char* m) {
-      if (m) { strncpy(mac, m, sizeof(mac) - 1); mac[sizeof(mac) - 1] = '\0'; }
-      else { mac[0] = '\0'; }
-    }
+    uint8_t typeBit;                  // hw::kBleTypeHR / kBleTypeCSC, 0 = invalid
   };
   
   static const uint8_t MAX_SENSORS = 2;  // HR, CSC
@@ -451,58 +199,67 @@ private:
   
   bool saveConfigToNVS();
   bool loadConfigFromNVS();
-  
-  // Discovery state
-  bool _discoveryActive;
-  char _discoveryType[4];  // "HR", "CSC" or empty
-  
-  // ============================================================
-  // Single-Writer Reconcile Pattern State
-  // ============================================================
-  // Desired state: what we WANT the BLE library to be configured as
-  // Applied state: what we HAVE actually configured in the BLE library
-  // Only reconcileSensorTargets() is allowed to call Add/Remove on the library
-  
-  DesiredSensorTarget _desiredTargets[MAX_SENSORS];   // One per sensor type
-  AppliedSensorState _appliedState[MAX_SENSORS];      // Tracks what's actually applied
-  bool _reconcileScheduled;                           // Flag to trigger reconcile
-  unsigned long _lastReconcileMs;                     // Throttle reconcile calls
+
+  // Guards everything below that web tasks touch.
+  portMUX_TYPE _bleMux;
+  hw::BleCommandQueue _commands;
+  hw::BleDiscoveryQueue _discoveryOps;
+  int8_t _pauseDesired;              // -1 none, 0 resume, 1 pause
+  bool _discoveryActive;             // clears only on DISCOVERY_DONE
+  uint8_t _discoveryError;
+  uint8_t _discoveryRequestedMask;
+  HwSensorInfo _snapshot[MAX_SENSORS];
+  uint8_t _snapshotCount;
+  HwDiscoveredSensor _discovered[BLE_DISCOVERY_MAX];
+  uint8_t _discoveredCount;
+  uint32_t _discoveredGeneration;
+
+  // Reconcile (loop task only)
+  hw::BleReconciler _reconciler;
+  bool _reconcileScheduled;
+  unsigned long _lastReconcileMs;
   static const unsigned long RECONCILE_INTERVAL_MS = 250;  // Min interval between reconciles
-  
-  // Reconcile helpers
-  int getDesiredIndex(SensorType type) const;
-  void setDesiredTarget(SensorType type, const char* name, const char* mac, int8_t addrType, bool enabled, bool forceApplyNow);
-  void scheduleReconcile();
-  
-  /**
-   * @brief Single-writer reconcile function (ONLY place that calls BikeSensorServerAdd/Remove)
-   * 
-   * Policy:
-   * - If desired enabled=false and not connected: RemoveSensor
-   * - If desired enabled=true and name differs from applied:
-   *   - If connected and forceApplyNow=false: defer (apply-on-disconnect)
-   *   - If connected and forceApplyNow=true: controlled reconnect
-   *   - If not connected: apply immediately
-   */
-  void reconcileSensorTargets();
-  
-  // Internal helpers
-  SensorType stringToSensorType(const char* type);
-  const char* sensorTypeToString(SensorType type);
-  void updateTelemetry();
-  void onSensorConnected(SensorType type, const char* name);
-  void onSensorDisconnected(SensorType type, const char* name);
-  void onHeartRateChanged(uint16_t hr);
-  void onDiscoveryComplete(uint8_t count);
-  
-  // Static callbacks (trampoline to instance)
-  static void staticOnHRConnected();
-  static void staticOnHRDisconnected();
-  static void staticOnCSCConnected();
-  static void staticOnCSCDisconnected();
-  static void staticOnHeartRateChanged(uint16_t hr);
-  static void staticOnSpeedCadenceChanged(uint16_t speed, uint16_t cadence);
-  static void staticOnDiscoveryComplete(uint8_t count);
+  bool _discoveryStopIssued;
+  bool _maintDiscoveryDone;
+  unsigned long _lastSnapshotMs;
+
+  // Callback records. Library callbacks run inside BikeSensor::update() on the
+  // loop task; they only append here and the same loop() pass drains it.
+  struct EventRecord { uint8_t type; uint8_t sensorType; int reason; };
+  struct DoneRecord { uint32_t generation; uint8_t count; uint8_t reason; };
+  static const uint8_t EVENT_FIFO_DEPTH = BBS_EVENT_QUEUE_DEPTH;
+  EventRecord _events[EVENT_FIFO_DEPTH];
+  uint8_t _eventCount;
+  bool _eventsDropped;
+  DoneRecord _done[2];
+  uint8_t _doneCount;
+  uint16_t _hrBpm;
+  bool _hrValid;
+  bool _hrNew;
+  uint16_t _cadenceRpm;
+  bool _cadenceNew;
+
+  BleEnqueueResult pushCommand(const hw::BleCommand& cmd);
+  BleEnqueueResult enqueueByName(hw::BleCmdKind kind, const char* name);
+  bool configuredNameExistsLocked(const char* name) const;
+  int findConfigByName(const char* name) const;
+  int findConfigByType(uint8_t typeBit) const;
+  void applyCommand(const hw::BleCommand& cmd);
+  void applySetFromDiscovery(uint32_t generation, uint8_t index, bool force);
+  void setTargetsFromConfig();
+  void processDiscoveryOps();
+  void processEvents();
+  void runReconcile(bool throttled);
+  void refreshSnapshot();
+  void markSensorsDirty();
+  void notifyDisplay(uint8_t typeBit);
+
+  static uint8_t stringToTypeBit(const char* type);
+  static const char* typeBitToString(uint8_t typeBit);
+
+  static void staticOnEvent(const BikeSensor::EventInfo& e);
+  static void staticOnHeartRate(uint16_t bpm);
+  static void staticOnCadence(uint16_t rpm);
   
   static BLERelayManager* _instance;  // For static callbacks
 };
@@ -514,63 +271,23 @@ private:
 // ============================================================
 #if !HW_ENABLE_BLE
 
-// Forward declarations
 #if HOMEWIND_ENABLE_WEBSOCKET
 class WebSocketTelemetry;
 #endif
 
 static const uint8_t BLE_SENSOR_NAME_MAX = 64;
 
-struct SensorInfo {
+struct HwSensorInfo {
   char name[BLE_SENSOR_NAME_MAX];
   char type[4];
   char mac[18];
   bool connected;
   int battery;
-  
-  SensorInfo() : connected(false), battery(-1) {
+  bool duplicate;
+  HwSensorInfo() : connected(false), battery(-1), duplicate(false) {
     name[0] = '\0';
     type[0] = '\0';
     mac[0] = '\0';
-  }
-  
-  void setName(const char* n) {
-    if (n) { strncpy(name, n, sizeof(name) - 1); name[sizeof(name) - 1] = '\0'; }
-    else { name[0] = '\0'; }
-  }
-  void setType(const char* t) {
-    if (t) { strncpy(type, t, sizeof(type) - 1); type[sizeof(type) - 1] = '\0'; }
-    else { type[0] = '\0'; }
-  }
-  void setMac(const char* m) {
-    if (m) { strncpy(mac, m, sizeof(mac) - 1); mac[sizeof(mac) - 1] = '\0'; }
-    else { mac[0] = '\0'; }
-  }
-};
-
-struct DiscoveredSensor {
-  char name[BLE_SENSOR_NAME_MAX];
-  char type[4];
-  char mac[18];
-  int8_t addrType;  // BLE address type (0=Public, 1=Random, -1=Unknown)
-  
-  DiscoveredSensor() : addrType(-1) {
-    name[0] = '\0';
-    type[0] = '\0';
-    mac[0] = '\0';
-  }
-  
-  void setName(const char* n) {
-    if (n) { strncpy(name, n, sizeof(name) - 1); name[sizeof(name) - 1] = '\0'; }
-    else { name[0] = '\0'; }
-  }
-  void setType(const char* t) {
-    if (t) { strncpy(type, t, sizeof(type) - 1); type[sizeof(type) - 1] = '\0'; }
-    else { type[0] = '\0'; }
-  }
-  void setMac(const char* m) {
-    if (m) { strncpy(mac, m, sizeof(mac) - 1); mac[sizeof(mac) - 1] = '\0'; }
-    else { mac[0] = '\0'; }
   }
 };
 
@@ -579,60 +296,20 @@ struct DiscoveredSensor {
  */
 class BLERelayManager {
 public:
-  BLERelayManager();
-  ~BLERelayManager();
-  
 #if HOMEWIND_ENABLE_WEBSOCKET
-  bool begin(WebSocketTelemetry* telemetry);
+  bool begin(WebSocketTelemetry*) { return false; }
 #else
-  bool begin();
+  bool begin() { return false; }
 #endif
-  
-  void loop();
-  bool loadConfiguredSensors();
-  bool getSensorConnectionState(const char* sensorName, String& type, String& mac, bool& connected, int& battery);
-  uint8_t getConfiguredSensors(SensorInfo* sensors, uint8_t maxSensors);
-  bool setConfiguredSensor(const char* name, const char* type, const char* mac = nullptr, int8_t addrType = -1, bool forceApplyNow = false);
-  bool deleteConfiguredSensor(const char* name);
-  bool connectSensor(const char* name);
-  bool disconnectSensor(const char* name);
-  bool reloadSensors();
-  bool startDiscovery(const char* type = nullptr);
-  bool stopDiscovery();
-  bool isDiscoveryActive() const { return false; }
-  uint8_t getDiscoveryResults(DiscoveredSensor* results, uint8_t maxResults);
-  bool pauseServer();
-  bool resumeServer();
+  void loop() {}
+  bool ready() const { return false; }
+  uint8_t getConfiguredSensors(HwSensorInfo*, uint8_t) { return 0; }
   bool isServerPaused() const { return false; }
   uint8_t getConfiguredSensorCount() const { return 0; }
   uint8_t getConnectedSensorCount() const { return 0; }
   uint8_t getLastDiscoveryCount() const { return 0; }
-  void stopForMaintenance();
-  bool isStoppedForMaintenance() const { return false; }
-
-private:
-  bool initialized;
-  bool _maintenanceStopped;
-  bool _serverPaused;
-  uint8_t _connectedCount;
-  uint8_t _lastDiscoveryCount;
-#if HOMEWIND_ENABLE_WEBSOCKET
-  WebSocketTelemetry* _telemetry;
-#endif
-  uint8_t _sensorCount;
-  bool _discoveryActive;
-  char _discoveryType[4];  // Match main class
-  bool _reconcileScheduled;
-  unsigned long _lastReconcileMs;
-  
-  static uint16_t calcCRC16(const uint8_t* data, size_t len);
-  bool saveConfigToNVS();
-  bool loadConfigFromNVS();
-  
-  static BLERelayManager* _instance;
 };
 
 #endif // !HW_ENABLE_BLE
 
 #endif // HOMEWIND_BLE_RELAY_MANAGER_H
-

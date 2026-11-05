@@ -122,7 +122,7 @@ void DisplayManager::updateHRState() {
   if (!g_bleRelayManager) {
     _hrStateConfigured = false;
   } else {
-    SensorInfo sensors[2];
+    HwSensorInfo sensors[2];
     uint8_t count = g_bleRelayManager->getConfiguredSensors(sensors, 2);
 
     for (uint8_t i = 0; i < count; i++) {
@@ -157,7 +157,7 @@ void DisplayManager::updateCSCState() {
   if (!g_bleRelayManager) {
     _cscStateConfigured = false;
   } else {
-    SensorInfo sensors[2];
+    HwSensorInfo sensors[2];
     uint8_t count = g_bleRelayManager->getConfiguredSensors(sensors, 2);
 
     for (uint8_t i = 0; i < count; i++) {

@@ -36,7 +36,7 @@
 
 #if HW_ENABLE_BLE
 #include "../core/BLERelayManager.h"
-#include <BluetoothBikeSensorServer.h>
+#include <BikeSensor.h>
 #endif
 
 #if HW_ENABLE_FANS
@@ -251,8 +251,8 @@ void App::loop() {
       status.bleSensorsConnected = bleManager->getConnectedSensorCount();
       status.bleSensorsConfigured = bleManager->getConfiguredSensorCount();
       status.bleDiscoveryCount = bleManager->getLastDiscoveryCount();
-      // Use BikeSensorServerIsScanning() to check actual BLE scan status (includes server-mode scan)
-      status.bleScanning = BikeSensorServerIsScanning();
+      // Actual library scan status (reconnect scans and discovery)
+      status.bleScanning = BikeSensor::scanning();
     }
 #endif
 #if HW_ENABLE_FANS
@@ -447,11 +447,9 @@ void App::advanceBootPhase() {
 #else
           HW_DEBUG_PRINTLN("[App] Pre-initializing NimBLE stack (two-phase BLE init)...");
 #endif
-          BluetoothBikeSensorServerInitStack(
-            "homewind",
-            SENSOR_TYPE_HEART_RATE | SENSOR_TYPE_SPEED_CADENCE,
-            BBS_MODE_MAC
-          );
+          if (!BikeSensor::initStack("homewind")) {
+            HW_ERROR_PRINTLN("[App] NimBLE stack pre-init failed");
+          }
         }
 #if HW_ENABLE_SERIAL_COMMANDS
         HeapDiagnostics::hwHeapDiagPrintTick("BLE_STACK_ONLY");
@@ -721,6 +719,10 @@ void App::initBLE() {
   if (currentPhase != BootPhase::PH_RUNNING) {
     return; // Not yet ready
   }
+  static bool s_bleBeginFailed = false;
+  if (s_bleBeginFailed) {
+    return; // BikeSensor::begin() failed once; no retry loop until reboot
+  }
   
   HW_DEBUG_PRINTLN("[App] Initializing BLE (background)...");
   
@@ -750,6 +752,7 @@ void App::initBLE() {
     HW_ERROR_PRINTLN("[App] BLERelayManager initialization failed");
     // Note: bleManager pointer remains valid (static instance), just not initialized
     bleReady = false;
+    s_bleBeginFailed = true;
   }
 #endif
 }
