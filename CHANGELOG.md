@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed – BluetoothBikeSensorServer 3.0 (`BikeSensor.h`)
 
-- **Dependency:** BluetoothBikeSensorServer >= 3.0.0 and NimBLE-Arduino 2.5.x (2.5.2 tested). The 2.x API is no longer used.
+- **Dependency:** BluetoothBikeSensorServer >= 3.0.0 and NimBLE-Arduino 2.5.2 as patched workspace copy `2.5.2+hw1` (`tools/build.sh` compiles it instead of `~/Documents/Arduino/libraries`). The 2.x API is no longer used.
 - **BLE task model:** Web handlers only queue sensor and discovery commands; `BLERelayManager::loop()` is the only caller of the library and the only writer of sensor NVS. Library callbacks only record events; heart rate and cadence reach the fan HR adapter and the display from `loop()`.
 - **Sensor NVS:** `ble_data` format unchanged (v2); 1.5.0 configurations load as they are. A MAC saved for both HR and CSC stays with HR; the CSC entry is kept and shown as duplicate.
 - **Sensor overview:** A sensor whose MAC is already used by the other type is saved but not active and shows "Duplicate (used by other sensor)". A discovered sensor without a name is listed and stored with its MAC as name.
@@ -29,6 +29,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`maintenance/begin`:** manual maintenance only (`reason` ignored); `maintenance/end` returns 409.
 - **Fans:** add/remove/update/control return 409 during maintenance. Web handlers only validate and queue; `loop()` applies the change to the fan list, writes fan NVS and updates the UI (one loop pass later, no longer instant). An applied change not yet written is saved when maintenance stops the fans.
 
+### Fixed
+
+- **Crash when a BLE client disconnects (e.g. closing Zwift):** NimBLE-Arduino 2.3.0–2.5.2 indexed a 4-entry array with the controller's connection handle; a central link with handle 4 overwrote a host list head and the device crashed on disconnect. Also possible in 1.5.0. Fixed in the patched NimBLE-Arduino workspace copy (`NimBLE-Arduino/PATCHES.md`).
+
 ### Removed
 
 - `FirmwareUpdateManager::beginDownloadSync`/`waitDownloadDone`/`startDownload`, the download waiter task, `ApiActions::setSettingsStore`/`setWiFiServiceWML`, public `WebSocketTelemetry::flushFrame`/`sendFrameToClient`, `FanController::removeFanCleanup` (folded into the queued remove).
@@ -47,7 +51,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Release note (≤ 160 B):** `BLE-Bibliothek 3.0. Update und Werksreset stoppen vorher BLE und Lüfter; Neustart-Knopf nach Abbruch.` (102 B)
 - **Version:** 1.6.0, **Build ID:** `20261105-090200`
-- **Dependency:** BluetoothBikeSensorServer >= 3.0.0, NimBLE-Arduino 2.5.x, SmartMiFanAsync >= 2.0.0
+- **Dependency:** BluetoothBikeSensorServer >= 3.0.0, NimBLE-Arduino 2.5.2+hw1 (workspace copy), SmartMiFanAsync >= 2.0.0
 
 ---
 

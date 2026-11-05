@@ -137,7 +137,7 @@ Third-party libraries (Library Manager):
 | ESP Async WebServer | 3.12.0 | Web server and `AsyncWebSocket` (web UI, API, telemetry) |
 | Async TCP | 3.5.0 | TCP layer for the web server |
 | ArduinoJson | 7.4.3 | JSON for API and settings |
-| NimBLE-Arduino | 2.5.2 (required: 2.5.x, ≥ 2.5.0) | Bluetooth LE stack |
+| NimBLE-Arduino | 2.5.2+hw1 (workspace copy, patched) | Bluetooth LE stack. The workspace copy fixes a crash in 2.3.0–2.5.2 when a central (e.g. Zwift) disconnects; see `NimBLE-Arduino/PATCHES.md` |
 | lvgl | 8.4.0 | Display graphics (Touch only). Use the preconfigured copy from `Amoled_LIB_Config/` (see below) |
 
 Homewind uses `AsyncWebSocket` from ESP Async WebServer, not `arduinoWebSockets`.
@@ -162,8 +162,8 @@ Requirements:
 
 - `arduino-cli` with the ESP32 core 3.3.12 installed (`arduino-cli core install esp32:esp32@3.3.12`)
 - `python3`
-- These libraries as folders **next to** the Homewind folder (same parent directory): HomeWindWSAmoled, BluetoothBikeSensorServer, SmartMiFanAsync, wifiMangerLite, GitFirmwareUpdate, NVSUtilityLibrary, DebugLog. The script compiles these workspace copies and stops if it picks up a copy from `~/Documents/Arduino/libraries/` instead.
-- The other libraries (lvgl, NimBLE-Arduino, ESP Async WebServer, Async TCP, ArduinoJson) in the Arduino libraries folder, plus `lv_conf.h` as described above.
+- These libraries as folders **next to** the Homewind folder (same parent directory): HomeWindWSAmoled, BluetoothBikeSensorServer, NimBLE-Arduino (patched 2.5.2), SmartMiFanAsync, wifiMangerLite, GitFirmwareUpdate, NVSUtilityLibrary, DebugLog. The script compiles these workspace copies and stops if it picks up a copy from `~/Documents/Arduino/libraries/` instead.
+- The other libraries (lvgl, ESP Async WebServer, Async TCP, ArduinoJson) in the Arduino libraries folder, plus `lv_conf.h` as described above.
 - No `build_opt.h` in the Homewind folder; it would override the variant flags.
 
 ```

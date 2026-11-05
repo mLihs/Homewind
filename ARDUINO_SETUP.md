@@ -86,7 +86,7 @@ Alle unter `~/Documents/Arduino/libraries/`. Getestete Versionen:
 |---|---|
 | lvgl | 8.4.0 |
 | HomeWindWSAmoled | 1.5.10 |
-| NimBLE-Arduino | 2.5.2 (2.5.x, ≥ 2.5.0) |
+| NimBLE-Arduino | 2.5.2+hw1 – gepatchte Workspace-Kopie `NimBLE-Arduino/` (2.3.0–2.5.2 stürzen ab, wenn sich ein Central wie Zwift trennt; siehe `NimBLE-Arduino/PATCHES.md`) |
 | ESP Async WebServer | 3.12.0 |
 | Async TCP | 3.5.0 |
 | ArduinoJson | 7.4.3 |
