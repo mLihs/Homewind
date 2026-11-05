@@ -119,7 +119,7 @@ POST /api/v1/action/sensor/set?generation=<discovery-generation>&index=<discover
 Save a sensor from the discovery list. The request is queued; the main loop resolves name, type, MAC and address type from the discovery snapshot, saves NVS and adds the sensor to the BLE library.
 
 **Parameters**:
-- `generation` (required since 1.6.0): `generation` from the `DISCOVERY_RESULTS` frame the index came from.
+- `generation` (since 1.6.0): `generation` from the `DISCOVERY_RESULTS` frame the index came from. If it is missing (pre-1.6.0 WebUI), the current discovery list is used.
 - `index` (required): Index from `DISCOVERY_RESULTS`. Use `index=-1` to cancel.
 - `force` / `forceApply` (optional): `1` = disconnect a connected sensor of the same type now; otherwise the change applies after it disconnects.
 

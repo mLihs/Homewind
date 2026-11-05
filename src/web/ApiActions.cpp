@@ -617,17 +617,21 @@ void ApiActions::handleSensorSet(AsyncWebServerRequest* request) {
     return;
   }
 
-  // Discovery generation the index belongs to (DISCOVERY_RESULTS frame)
+  // Discovery generation the index belongs to (DISCOVERY_RESULTS frame).
+  // Pre-1.6.0 WebUIs send no generation: use the current discovery list.
   char genStr[12];
-  if (!WebHelpers::getParamToBuffer(request, "generation", genStr, sizeof(genStr), false)) {
-    sendError(request, 400, "Missing generation parameter");
-    return;
-  }
-  char* end = nullptr;
-  const unsigned long generation = strtoul(genStr, &end, 10);
-  if (end == genStr || *end != '\0') {
-    sendError(request, 400, "Invalid generation parameter");
-    return;
+  unsigned long generation;
+  if (WebHelpers::getParamToBuffer(request, "generation", genStr, sizeof(genStr), false)) {
+    char* end = nullptr;
+    generation = strtoul(genStr, &end, 10);
+    if (end == genStr || *end != '\0') {
+      sendError(request, 400, "Invalid generation parameter");
+      return;
+    }
+  } else {
+    uint32_t current = 0;
+    g_bleRelayManager->discoverySnapshot(current);
+    generation = current;
   }
   
   // Get forceApply parameter (optional)
