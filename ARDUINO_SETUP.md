@@ -80,7 +80,7 @@ Symptom im Serial Monitor – danach kommt nichts mehr:
 
 ## 3. Bibliotheken
 
-Alle unter `~/Documents/Arduino/libraries/`. Getestete Versionen:
+Alle unter `~/Documents/Arduino/libraries/`. Für NimBLE-Arduino muss dort die gepatchte Workspace-Kopie liegen (Ordner `NimBLE-Arduino/` ersetzen); mit der Library-Manager-Version 2.5.2 kommt der Absturz beim Trennen zurück. `tools/build.sh` bindet die Workspace-Kopie selbst ein. Getestete Versionen:
 
 | Bibliothek | Version |
 |---|---|

@@ -154,7 +154,7 @@ The included `lv_conf.h` already has the required settings: `LV_MEM_CUSTOM 1` wi
 
 ### 4. Build and flash
 
-**Option A – Arduino IDE:** open `Homewind.ino`, select board and port, check the settings above, then Sketch → Upload.
+**Option A – Arduino IDE:** open `Homewind.ino`, select board and port, check the settings above, then Sketch → Upload. The IDE uses the libraries in `~/Documents/Arduino/libraries/`: replace the `NimBLE-Arduino` folder there with the patched workspace copy first, otherwise the build uses the unpatched NimBLE-Arduino and the disconnect crash comes back.
 
 **Option B – terminal, without the Arduino IDE:** `tools/build.sh` builds both variants with the board settings above, checks the result and flashes. It uses `arduino-cli`.
 
