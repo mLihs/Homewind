@@ -86,11 +86,11 @@ Alle unter `~/Documents/Arduino/libraries/`. Getestete Versionen:
 |---|---|
 | lvgl | 8.4.0 |
 | HomeWindWSAmoled | 1.5.8 |
-| NimBLE-Arduino | 2.5.1 |
+| NimBLE-Arduino | 2.5.2 (2.5.x, ≥ 2.5.0) |
 | ESP Async WebServer | 3.12.0 |
 | Async TCP | 3.5.0 |
 | ArduinoJson | 7.4.3 |
-| BluetoothBikeSensorServer | 2.2.19.0 |
+| BluetoothBikeSensorServer | 3.0.0 (≥ 3.0.0, API `BikeSensor.h`) |
 | SmartMiFanAsync | 1.8.2 |
 | wifiMangerLite | 3.0.0 |
 | NVSUtilityLibrary | 1.0.0 |

@@ -1,8 +1,8 @@
 # Homewind Documentation Index
 
-**Version**: 1.5.0
+**Version**: 1.6.0
 **Platform**: ESP32 (Arduino Core)  
-**Last Updated**: 2026-10-31
+**Last Updated**: 2026-11-05
 
 ---
 
@@ -109,7 +109,7 @@ See: [DISPLAY_UPDATE_BUG_ANALYSIS.md](./DISPLAY_UPDATE_BUG_ANALYSIS.md), [DISPLA
 - `src/web/WEBSOCKET_PROTOCOL.md` – WebSocket protocol specification (see [05_APIS.md](./05_APIS.md))
 
 ### External Libraries
-- **BluetoothBikeSensorServer** – BLE sensor relay (✅ integrated via BLERelayManager)
+- **BluetoothBikeSensorServer** (≥ 3.0.0, API `BikeSensor.h`) – BLE sensor relay (✅ integrated via BLERelayManager)
 - **SmartMiFanAsync** – Fan control (✅ integrated via FanController)
 - **GitFirmwareUpdate** – OTA update engine (✅ integrated via FirmwareUpdateManager)
 - **HomeWindWSAmoled** – AMOLED display (✅ integrated via DisplayManager)

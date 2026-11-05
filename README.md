@@ -120,7 +120,7 @@ Homewind libraries (by the author):
 
 | Library | Version | Purpose |
 | --- | --- | --- |
-| [BluetoothBikeSensorServer](https://github.com/mLihs/BluetoothBikeSensorServer) | 2.2.21.0 | Relays heart rate, speed/cadence and power from BLE sensors to a local GATT server |
+| [BluetoothBikeSensorServer](https://github.com/mLihs/BluetoothBikeSensorServer) | 3.0.0 (required: ≥ 3.0.0, API `BikeSensor.h`) | Relays heart rate, speed/cadence and power from BLE sensors to a local GATT server |
 | [SmartMiFanAsync](https://github.com/mLihs/SmartMiFanAsync) | 2.0.0 (required: ≥ 2.0.0) | Non-blocking Xiaomi / Smartmi fan control over miIO |
 | [GitFirmwareUpdate](https://github.com/mLihs/GitFirmwareUpdate) | 1.0.4 | OTA firmware updates |
 | [wifiMangerLite](https://github.com/mLihs/wifiMangerLite) | 3.0.0 | Wi-Fi setup via captive portal, NVS storage |
@@ -135,7 +135,7 @@ Third-party libraries (Library Manager):
 | ESP Async WebServer | 3.12.0 | Web server and `AsyncWebSocket` (web UI, API, telemetry) |
 | Async TCP | 3.5.0 | TCP layer for the web server |
 | ArduinoJson | 7.4.3 | JSON for API and settings |
-| NimBLE-Arduino | 2.5.1 | Bluetooth LE stack |
+| NimBLE-Arduino | 2.5.2 (required: 2.5.x, ≥ 2.5.0) | Bluetooth LE stack |
 | lvgl | 8.4.0 | Display graphics (Touch only). Use the preconfigured copy from `Amoled_LIB_Config/` (see below) |
 
 Homewind uses `AsyncWebSocket` from ESP Async WebServer, not `arduinoWebSockets`.

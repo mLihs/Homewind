@@ -311,31 +311,32 @@ public:
 
 **File**: `src/core/MaintenanceMode.h`, `src/core/MaintenanceMode.cpp`
 
-**Purpose**: Blocks non-whitelisted API endpoints during critical operations (OTA, factory reset).
+**Purpose**: One-way maintenance lifecycle for OTA download, factory reset and manual maintenance (since 1.6.0). Blocks non-whitelisted API endpoints.
 
-**API**:
+**API** (excerpt):
 ```cpp
-enum MaintenanceReason {
-  UNKNOWN = 0,
-  OTA = 1,
-  FACTORY_RESET = 2
-};
-
 namespace MaintenanceMode {
-  void begin(MaintenanceReason reason);
-  void end();
+  hw::MaintAdmit request(hw::MaintReason reason);           // any task
+  hw::MaintAdmit requestDownload(std::atomic<uint8_t>& fwPhase);
+  bool end();                    // no-op, always false (409)
   bool isActive();
-  MaintenanceReason reason();
-  const char* reasonString();  // "ota", "factory_reset", "unknown"
+  bool admissionClosed();        // BLE/fan queues and deferred inits reject
+  const char* reasonString();    // "ota", "factory_reset", "manual", "none"
+  bool restartRequired();
+  void requestRestart();         // reboot from loop() after 250 ms
+  bool requestWifiReset();       // false unless the lifecycle is IDLE
+  void loop();                   // loop task, before BLE and fan loops
 }
 ```
 
 **Behavior**:
-- Blocks all non-whitelisted API endpoints with `503 Service Unavailable`
-- Stops background services (fans, BLE) for maintenance
-- Idempotent (safe to call multiple times)
+- Lifecycle `IDLE → REQUESTED → STOPPING_DISCOVERY → STOPPING_SCANS → REMOVING → ACKED`, or `FAILED`; terminal until reboot. State logic lives in the Arduino-free `MaintenanceLifecycle.h` (host test `tests/maintenance_lifecycle_test.cpp`).
+- Same reason while active → success, no-op; different reason → 409.
+- `loop()` stops fans and the HR adapter, quiesces `BikeSensor`, waits for discovery and scans to end, removes the sensors, then ACKs. Deadlines: discovery 6 s, scans `BBS_CONNECT_TIMEOUT_MS + 3 s`, total 15 s; a miss → FAILED + `restart_required`.
+- Factory reset: after ACK, erase `homewind` and `hwwifi`, record `{attempted, failedMask}` in RTC memory and reboot.
+- Blocks all non-whitelisted API endpoints with `503 Service Unavailable`.
 
-**Usage**: Called by `FirmwareUpdateManager` before install, by `ApiActions` during factory reset.
+**Usage**: `FirmwareUpdateManager::requestDownload()`, `ApiActions` (factory reset, maintenance begin/status, restart, WiFi reset), `App::loopSubsystems()`.
 
 ---
 

@@ -1,7 +1,7 @@
 /**
  * @file BuildInfo.h
  * @brief Build metadata (version, build ID, etc.)
- * @note Force rebuild: 2026-10-31 (1.5.0 SmartMiFan 2.0)
+ * @note Force rebuild: 2026-11-05 (1.6.0 BikeSensor 3.0)
  */
 
 #ifndef HOMEWIND_BUILDINFO_H
@@ -22,14 +22,14 @@
 #endif
 
 #ifndef FW_VERSION
-#define FW_VERSION "1.5.0"
+#define FW_VERSION "1.6.0"
 #endif
 
 // Build ID (set by CI/CD or build script, e.g. git short hash)
 // Override via compiler flag: -DFW_BUILD_ID=\"abc1234\"
 // Format: YYYYMMDD-HHMMSS (serial number)
 #ifndef FW_BUILD_ID
-#define FW_BUILD_ID "20261031-190000"
+#define FW_BUILD_ID "20261105-090200"
 #endif
 
 namespace BuildInfo {
