@@ -14,7 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Sensor NVS:** `ble_data` format unchanged (v2); 1.5.0 configurations load as they are. A MAC saved for both HR and CSC stays with HR; the CSC entry is kept and shown as duplicate.
 - **Sensor overview:** A sensor whose MAC is already used by the other type is saved but not active and shows "Duplicate (used by other sensor)". A discovered sensor without a name is listed and stored with its MAC as name.
 - **Discovery:** `discovery/start` answers 200 once queued. A start while a discovery is still open is reported as busy in `DISCOVERY_STATUS` (the UI shows "No sensors found"). Up to 15 results, as many as always fit into one `DISCOVERY_RESULTS` frame (`-DBBS_MAX_DISCOVERED=15` in `tools/build.sh`; 1.5.0 asked the library for up to 50).
-- **`sensor/set`:** needs `generation` and `index` from `DISCOVERY_RESULTS`; a result from an older discovery returns 409. The WebUI then offers a new search; other errors are shown instead of being ignored.
+- **`sensor/set`:** takes `generation` and `index` from `DISCOVERY_RESULTS`; a result from an older discovery returns 409. Without `generation` (a still open pre-1.6.0 WebUI after the update) the current discovery list is used. The WebUI then offers a new search; other errors are shown instead of being ignored.
+- **WebUI caching:** `index.html` (also `/`) is sent with `Cache-Control: no-cache` (was `max-age=3600`) and revalidated by ETag, so a reload after an update gets the new WebUI. Other assets are unchanged (versioned with `?v=hash`).
 - **WebSocket:** `DISCOVERY_RESULTS` (0x05) appends `generation:uint32` after the entries (older decoders ignore it). `SENSORS_SNAPSHOT` (0x02) appends one status byte per sensor (1 = duplicate), `DISCOVERY_STATUS` (0x04) appends an error byte (1 = busy). `telemetry/refresh?client_id=` sends the snapshots from the main loop.
 
 ### Changed – One-way maintenance (OTA, factory reset)
