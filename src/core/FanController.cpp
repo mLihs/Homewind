@@ -146,6 +146,8 @@ void FanController::stopForMaintenance() {
   if (_maintenanceStopped) return;
   _maintenanceStopped = true;
   if (!initialized) return;
+  // loop() no longer runs after this: persist the last applied fan change.
+  if (_nvsDirty.exchange(false)) saveFansToNVS();
   // No wait for pending commands: the maintenance budget is 15 s in total (§7.4).
   // prepareForSleep() cancels the active waves itself.
   SmartMiFan::prepareForSleep(true);
