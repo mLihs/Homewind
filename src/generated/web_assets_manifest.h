@@ -36,7 +36,7 @@ static const WebAsset WEB_ASSETS[] PROGMEM = {
     .len = webui_index_html_len,
     .gzipped = true,
     .mime_type = "text/html",
-    .etag = "1920033f",
+    .etag = "1501ed45",
     .cacheSeconds = 3600
   },  {
     .path = "app.css",
@@ -52,7 +52,7 @@ static const WebAsset WEB_ASSETS[] PROGMEM = {
     .len = webui_app_js_len,
     .gzipped = true,
     .mime_type = "application/javascript",
-    .etag = "cbf3d635",
+    .etag = "cd7ad256",
     .cacheSeconds = 86400
   }
 };
@@ -70,9 +70,9 @@ static const size_t WEB_ASSETS_COUNT = 3;
  * fetch updated assets after WebUI changes.
  * 
  * Example usage in HTML:
- *   <link rel="stylesheet" href="app.css?v=0fe50315">
- *   <script src="app.js?v=0fe50315" defer></script>
+ *   <link rel="stylesheet" href="app.css?v=0d6c4f59">
+ *   <script src="app.js?v=0d6c4f59" defer></script>
  */
-#define HOMEWIND_WEBUI_BUILD_HASH "0fe50315"
+#define HOMEWIND_WEBUI_BUILD_HASH "0d6c4f59"
 
 #endif // HOMEWIND_WEB_ASSETS_MANIFEST_H

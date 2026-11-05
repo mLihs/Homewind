@@ -1507,6 +1507,31 @@ window.showErrorModal = function(error, options = {}) {
 // Shared reboot monitoring – poll until device is back, then close
 // modal and reload. Used by Firmware Update and Device Restart.
 // ===============================================================
+window.showRebootTakingLonger = function () {
+  if (window.AppModal && typeof window.AppModal.open === "function") {
+    window.AppModal.open({
+      title: "Reboot Taking Longer",
+      content: `
+        <div class="modal-content-centered">
+          <p class="modal-text">
+            The device is taking longer to restart than expected.
+            Please wait a moment and reload the page manually.
+          </p>
+        </div>
+      `,
+      buttons: [{
+        type: "save",
+        label: "Reload Page",
+        className: "btn btn-regular btn-primary",
+        closeOnClick: false,
+        onClick: () => { window.location.reload(); return true; },
+      }],
+    });
+  } else {
+    window.location.reload();
+  }
+};
+
 window.startRebootMonitoring = function (options) {
   const {
     endpoint = (typeof FW_API !== "undefined" && FW_API.status) ? FW_API.status : "/api/v1/action/firmware/status",
@@ -1515,30 +1540,7 @@ window.startRebootMonitoring = function (options) {
       if (window.AppModal && typeof window.AppModal.close === "function") window.AppModal.close();
       window.location.reload();
     },
-    onTimeout = () => {
-      if (window.AppModal && typeof window.AppModal.open === "function") {
-        window.AppModal.open({
-          title: "Reboot Taking Longer",
-          content: `
-            <div class="modal-content-centered">
-              <p class="modal-text">
-                The device is taking longer to restart than expected.
-                Please wait a moment and reload the page manually.
-              </p>
-            </div>
-          `,
-          buttons: [{
-            type: "save",
-            label: "Reload Page",
-            className: "btn btn-regular btn-primary",
-            closeOnClick: false,
-            onClick: () => { window.location.reload(); return true; },
-          }],
-        });
-      } else {
-        window.location.reload();
-      }
-    },
+    onTimeout = window.showRebootTakingLonger,
   } = options || {};
 
   const timing = (window.TIMING || {});
@@ -5429,6 +5431,10 @@ if (document.readyState === "loading") {
           onSuccess: () => {
             isRestarting = false;
             showFactoryResetReport();
+          },
+          onTimeout: () => {
+            isRestarting = false;
+            window.showRebootTakingLonger();
           },
         });
       })
