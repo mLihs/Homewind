@@ -225,16 +225,20 @@ bool FirmwareUpdateManager::requestSearch() {
   return true;
 }
 
-hw::MaintAdmit FirmwareUpdateManager::requestDownload() {
+FirmwareUpdateManager::DownloadRequest FirmwareUpdateManager::requestDownload() {
   if (!_ready || !_fwUpdate || !_jobQueue) {
-    return hw::MaintAdmit::NOT_READY;
+    return DownloadRequest::NOT_READY;
   }
   
   const hw::MaintAdmit admit = MaintenanceMode::requestDownload(_phase);
   if (admit != hw::MaintAdmit::ACCEPTED) {
     HW_DEBUG_PRINTF("[FirmwareUpdate] Download not admitted (%u) in phase %u\n",
                     static_cast<unsigned>(admit), static_cast<unsigned>(getPhase()));
-    return admit;
+    switch (admit) {
+      case hw::MaintAdmit::ALREADY: return DownloadRequest::ACCEPTED;
+      case hw::MaintAdmit::CONFLICT: return DownloadRequest::CONFLICT;
+      default: return DownloadRequest::NOT_READY;
+    }
   }
   
   // Enqueue download job (zero timeout; no rollback on failure)
@@ -243,11 +247,11 @@ hw::MaintAdmit FirmwareUpdateManager::requestDownload() {
     HW_ERROR_PRINTLN("[FirmwareUpdate] Failed to enqueue download job");
     setError("Download job could not be queued");
     MaintenanceMode::failAdmission();
-    return admit;
+    return DownloadRequest::QUEUE_FAILED;
   }
   
   HW_DEBUG_PRINTLN("[FirmwareUpdate] Download job enqueued (quiescing)");
-  return admit;
+  return DownloadRequest::ACCEPTED;
 }
 
 bool FirmwareUpdateManager::startSearch() {

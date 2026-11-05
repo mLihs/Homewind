@@ -68,9 +68,14 @@ public:
    * Request firmware download (design §7.4): maintenance admission with
    * READY_TO_UPDATE→QUIESCING, then the job is enqueued with zero timeout.
    * The worker downloads only after the maintenance ACK.
-   * @return ACCEPTED/ALREADY on success; CONFLICT/NOT_READY otherwise
    */
-  hw::MaintAdmit requestDownload();
+  enum class DownloadRequest : uint8_t {
+    ACCEPTED,      // admitted and queued (or already running)
+    CONFLICT,      // other maintenance active
+    NOT_READY,     // no update ready
+    QUEUE_FAILED   // admitted, job not queued: restart_required
+  };
+  DownloadRequest requestDownload();
   
   /**
    * @deprecated Use requestSearch() instead

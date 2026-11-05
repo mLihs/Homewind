@@ -329,6 +329,7 @@ Admission enters maintenance (reason `ota`): the main loop stops fans, the HR ad
 **Status Codes**:
 - `202 Accepted`: Download admitted (also when it was already admitted)
 - `409 Conflict`: `{"ok":false,"error":"not_ready_to_update"}` or `{"ok":false,"error":"maintenance_active"}` (other maintenance running)
+- `500`: `{"ok":false,"error":"restart_required"}` – admitted, but the download job could not be queued; maintenance has already started, restart the device
 - `503 Service Unavailable`: System not ready or OTA not available
 
 **Progress**: Reported via WebSocket `FIRMWARE_PROGRESS` frame and the status endpoint.
@@ -472,7 +473,7 @@ Clear all settings and reboot.
 
 Enters maintenance (reason `factory_reset`). After the main loop has stopped fans and BLE, it clears the Preferences namespace `homewind` (sensors, fans, HR settings) and, with the WML backend, the WiFi credentials (`hwwifi`), then reboots. If stopping fails, nothing is erased and the status shows `restart_required`.
 
-**Response**: `202` `{"ok":true,"job":"factory_reset"}`
+**Response**: `202` `{"ok":true,"job":"factory_reset"}`; with the WML backend `{"ok":true,"job":"factory_reset","ap_mode_after_reboot":true}` (the WiFi credentials are erased, the device comes back as access point).
 
 **Status Codes**:
 - `202 Accepted`: Admitted (also when already admitted)

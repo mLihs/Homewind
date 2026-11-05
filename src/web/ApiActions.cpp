@@ -1032,15 +1032,17 @@ void ApiActions::handleFirmwareDownload(AsyncWebServerRequest* request) {
   // Admission + enqueue only; the loop quiesces BLE/fans, the worker downloads
   // after the ACK. Progress and result via firmware/status (design §7.4).
   switch (g_firmwareUpdateManager->requestDownload()) {
-    case hw::MaintAdmit::ACCEPTED:
-    case hw::MaintAdmit::ALREADY:
+    case FirmwareUpdateManager::DownloadRequest::ACCEPTED:
       request->send(202, "application/json", "{\"ok\":true,\"job\":\"ota\",\"state\":\"quiescing\"}");
       return;
-    case hw::MaintAdmit::CONFLICT:
+    case FirmwareUpdateManager::DownloadRequest::CONFLICT:
       request->send(409, "application/json", "{\"ok\":false,\"error\":\"maintenance_active\"}");
       return;
-    case hw::MaintAdmit::NOT_READY:
+    case FirmwareUpdateManager::DownloadRequest::NOT_READY:
       request->send(409, "application/json", "{\"ok\":false,\"error\":\"not_ready_to_update\"}");
+      return;
+    case FirmwareUpdateManager::DownloadRequest::QUEUE_FAILED:
+      request->send(500, "application/json", "{\"ok\":false,\"error\":\"restart_required\"}");
       return;
   }
 #else
@@ -1277,7 +1279,16 @@ void ApiActions::handleFactoryReset(AsyncWebServerRequest* request) {
   // Whitelisted - no maintenance gate check (by definition)
   // Erase and reboot run in loop() after the maintenance ACK.
   HW_DEBUG_PRINTLN("[Reset] Factory reset requested");
-  sendAdmitResult(request, MaintenanceMode::request(hw::MaintReason::FACTORY_RESET), "factory_reset");
+  const hw::MaintAdmit admit = MaintenanceMode::request(hw::MaintReason::FACTORY_RESET);
+#if HW_ENABLE_WIFI && HW_WIFI_BACKEND_WML
+  if (admit == hw::MaintAdmit::ACCEPTED || admit == hw::MaintAdmit::ALREADY) {
+    // The WiFi credentials are erased too: the device comes back as access point.
+    request->send(202, "application/json",
+                  "{\"ok\":true,\"job\":\"factory_reset\",\"ap_mode_after_reboot\":true}");
+    return;
+  }
+#endif
+  sendAdmitResult(request, admit, "factory_reset");
 }
 
 void ApiActions::handleSystemRestart(AsyncWebServerRequest* request) {
