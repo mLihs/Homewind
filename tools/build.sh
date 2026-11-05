@@ -130,9 +130,9 @@ with open(header, "w", encoding="utf-8") as fh:
 # Response-file quoting so the space in "ESP-Code 1_1" stays one argument.
 with open(opt, "w", encoding="utf-8") as fh:
     fh.write(f'"-I{include_dir}"\n')
-    # Discovery snapshot size in BLERelayManager.h (BLE_DISCOVERY_MAX); the
-    # library default is 16. Applies to every translation unit.
-    fh.write("-DBBS_MAX_DISCOVERED=32\n")
+    # Discovery snapshot size = BLE_DISCOVERY_MAX in BLERelayManager.h (15 fit
+    # into one DISCOVERY_RESULTS frame). Applies to every translation unit.
+    fh.write("-DBBS_MAX_DISCOVERED=15\n")
 PY
 }
 

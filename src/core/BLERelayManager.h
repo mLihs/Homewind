@@ -36,9 +36,12 @@ class WebSocketTelemetry;
 static const uint8_t BLE_SENSOR_NAME_MAX = 64;
 
 /**
- * @brief Discovery snapshot capacity (Homewind builds with -DBBS_MAX_DISCOVERED=32)
+ * @brief Discovery snapshot capacity: what always fits into one DISCOVERY_RESULTS
+ * frame (static_assert in WebSocketTelemetry.cpp). tools/build.sh sets
+ * -DBBS_MAX_DISCOVERED to the same value.
  */
-static const uint8_t BLE_DISCOVERY_MAX = 32;
+static const uint8_t BLE_DISCOVERY_MAX = 15;
+static_assert(BBS_MAX_DISCOVERED == BLE_DISCOVERY_MAX, "tools/build.sh must set -DBBS_MAX_DISCOVERED=15");
 
 /**
  * @struct HwSensorInfo
@@ -207,7 +210,8 @@ private:
   int8_t _pauseDesired;              // -1 none, 0 resume, 1 pause
   bool _discoveryActive;             // clears only on DISCOVERY_DONE
   uint8_t _discoveryError;
-  uint8_t _discoveryRequestedMask;
+  uint8_t _discoveryRequestedMask;   // mask of the discovery started last
+  uint8_t _discoveredMask;           // mask of the discovery in the snapshot
   HwSensorInfo _snapshot[MAX_SENSORS];
   uint8_t _snapshotCount;
   HwDiscoveredSensor _discovered[BLE_DISCOVERY_MAX];
@@ -226,7 +230,7 @@ private:
   // Callback records. Library callbacks run inside BikeSensor::update() on the
   // loop task; they only append here and the same loop() pass drains it.
   struct EventRecord { uint8_t type; uint8_t sensorType; int reason; };
-  struct DoneRecord { uint32_t generation; uint8_t count; uint8_t reason; };
+  struct DoneRecord { uint32_t generation; uint8_t count; uint8_t reason; uint8_t mask; };
   static const uint8_t EVENT_FIFO_DEPTH = BBS_EVENT_QUEUE_DEPTH;
   EventRecord _events[EVENT_FIFO_DEPTH];
   uint8_t _eventCount;

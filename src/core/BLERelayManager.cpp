@@ -93,6 +93,7 @@ BLERelayManager::BLERelayManager()
   , _discoveryActive(false)
   , _discoveryError(0)
   , _discoveryRequestedMask(0)
+  , _discoveredMask(0)
   , _snapshotCount(0)
   , _discoveredCount(0)
   , _discoveredGeneration(0)
@@ -449,7 +450,7 @@ void BLERelayManager::applySetFromDiscovery(uint32_t generation, uint8_t index, 
   portENTER_CRITICAL(&_bleMux);
   valid = generation == _discoveredGeneration && index < _discoveredCount;
   if (valid) rec = _discovered[index];
-  requestedMask = _discoveryRequestedMask;
+  requestedMask = _discoveredMask;
   portEXIT_CRITICAL(&_bleMux);
   if (!valid) {
     HW_DEBUG_PRINTF("[BLE] setSensor: stale generation=%lu index=%u\n",
@@ -598,6 +599,7 @@ void BLERelayManager::processEvents() {
     refreshSnapshot();
     if (!BikeSensor::connected(BikeSensor::SensorType::HEART_RATE)) {
       _hrValid = false;
+      _hrNew = false;
 #if HW_ENABLE_FANS
       if (g_fanHrAdapter) g_fanHrAdapter->onHeartRateDisconnected(millis());
 #endif
@@ -623,6 +625,7 @@ void BLERelayManager::processEvents() {
                         e.reason, BikeSensor::disconnectReasonString(e.reason));
         if (typeBit == hw::kBleTypeHR) {
           _hrValid = false;
+          _hrNew = false;   // a sample from the same update() is stale now
 #if HW_ENABLE_FANS
           if (g_fanHrAdapter) g_fanHrAdapter->onHeartRateDisconnected(millis());
 #endif
@@ -658,25 +661,26 @@ void BLERelayManager::processEvents() {
     const DoneRecord& d = _done[n];
     uint8_t count = BikeSensor::discoveredCount();
     if (count > BLE_DISCOVERY_MAX) count = BLE_DISCOVERY_MAX;
-    portENTER_CRITICAL(&_bleMux);
-    _discoveredCount = 0;
-    portEXIT_CRITICAL(&_bleMux);
+    // Build the new list outside the mux, then swap list, count, generation
+    // and mask in one section so readers never see a mix of two discoveries.
+    HwDiscoveredSensor next[BLE_DISCOVERY_MAX];
+    uint8_t nextCount = 0;
     for (uint8_t i = 0; i < count; i++) {
       BikeSensor::DiscoveredSensor src;
       if (!BikeSensor::discovered(i, src)) break;
-      HwDiscoveredSensor rec = {};
+      HwDiscoveredSensor& rec = next[nextCount++];
       memcpy(rec.name, src.name, sizeof(rec.name));
       rec.name[sizeof(rec.name) - 1] = '\0';
       memcpy(rec.mac, src.mac, sizeof(rec.mac));
       rec.addrType = src.addrType;
       rec.typeMask = src.typeMask;
-      portENTER_CRITICAL(&_bleMux);
-      _discovered[_discoveredCount++] = rec;
-      portEXIT_CRITICAL(&_bleMux);
     }
     hw::BleDiscOp op;
     portENTER_CRITICAL(&_bleMux);
+    memcpy(_discovered, next, nextCount * sizeof(HwDiscoveredSensor));
+    _discoveredCount = nextCount;
     _discoveredGeneration = d.generation;
+    _discoveredMask = d.mask;
     _discoveryActive = false;
     if (_discoveryOps.peek(op) && op == hw::BleDiscOp::STOP) {
       _discoveryOps.pop();
@@ -822,6 +826,7 @@ void BLERelayManager::staticOnEvent(const BikeSensor::EventInfo& e) {
     d.generation = e.generation;
     d.count = e.count;
     d.reason = static_cast<uint8_t>(e.reason);
+    d.mask = self->_discoveryRequestedMask;
     return;
   }
   if (self->_eventCount >= EVENT_FIFO_DEPTH) {

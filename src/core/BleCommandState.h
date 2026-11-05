@@ -27,6 +27,21 @@ inline int bleSlotOf(uint8_t typeBit) {
 }
 inline uint8_t bleTypeOfSlot(uint8_t slot) { return slot == 0 ? kBleTypeHR : kBleTypeCSC; }
 
+// "xx:xx:xx:xx:xx:xx" (hex, either case) and addrType -1/0/1: the inputs
+// BikeSensor::addByMac() accepts, so a false from it can only mean duplicate.
+inline bool bleAddressValid(const char* mac, int8_t addrType) {
+  if (!mac || addrType < -1 || addrType > 1) return false;
+  for (int i = 0; i < 17; ++i) {
+    const char c = mac[i];
+    if (i % 3 == 2) {
+      if (c != ':') return false;
+    } else if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'))) {
+      return false;
+    }
+  }
+  return mac[17] == '\0';
+}
+
 // ---------------------------------------------------------------------------
 // Sensor command queue (tagged union, capacity 8)
 // ---------------------------------------------------------------------------
@@ -221,7 +236,7 @@ private:
       return;
     }
 
-    if (t.mac[0] == '\0') {
+    if (!bleAddressValid(t.mac, t.addrType)) {   // never offered to the library
       t.dirty = false;
       return;
     }

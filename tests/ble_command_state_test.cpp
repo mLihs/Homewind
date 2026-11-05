@@ -207,7 +207,28 @@ static void testDiscoveryQueue() {
   CHECK(q.size() == 0);
 }
 
+static void testInvalidAddressNeverReachesLibrary() {
+  CHECK(bleAddressValid("AA:bb:cc:dd:ee:01", 1));
+  CHECK(bleAddressValid(kMacA, -1));
+  CHECK(!bleAddressValid("aa:bb:cc:dd:ee", 0));
+  CHECK(!bleAddressValid("aa:bb:cc:dd:ee:01:", 0));
+  CHECK(!bleAddressValid("aa-bb-cc-dd-ee-01", 0));
+  CHECK(!bleAddressValid("gg:bb:cc:dd:ee:01", 0));
+  CHECK(!bleAddressValid(kMacA, 2));
+  CHECK(!bleAddressValid("", 0));
+  // An invalid NVS entry is skipped: no add, no duplicate status.
+  BleReconciler r;
+  FakeLibrary lib;
+  r.setTarget(kBleTypeCSC, "CSC", "not-a-mac", 0, true, false);
+  r.setTarget(kBleTypeHR, "HR", kMacA, 5, true, false);
+  r.run(lib);
+  CHECK(lib.adds == 0);
+  CHECK(!r.duplicate(kBleTypeCSC) && !r.duplicate(kBleTypeHR));
+  CHECK(!r.pending());
+}
+
 int main() {
+  testInvalidAddressNeverReachesLibrary();
   testRestoreDuplicate();
   testSetSensorDuplicateRemovesOldSlot();
   testRetryAfterOtherRemoved();
