@@ -10,8 +10,7 @@ Diese Seite beschreibt den **Datenfluss vom und zum UI** für die zentralen Funk
 
 | Aktion im UI | HTTP API | Handler | Parameter |
 |--------------|----------|---------|-----------|
-| Sensor aus Discovery auswählen | `POST /api/v1/action/sensor/set` | `handleSensorSet` | `index` (Discovery-Cache-Index) |
-| Sensor manuell hinzufügen | `POST /api/v1/action/sensor/set` | `handleSensorSet` | `name`, `type`, `mac`, `addrType` (optional) |
+| Sensor aus Discovery auswählen | `POST /api/v1/action/sensor/set` | `handleSensorSet` | `generation`, `index` (aus `DISCOVERY_RESULTS`) |
 | Sensor verbinden | `POST /api/v1/action/sensor/connect` | `handleSensorConnect` | `name` |
 | Sensor trennen | `POST /api/v1/action/sensor/disconnect` | `handleSensorDisconnect` | `name` |
 | Sensor löschen | `POST /api/v1/action/sensor/delete` | `handleSensorDelete` | `name` |
@@ -19,15 +18,15 @@ Diese Seite beschreibt den **Datenfluss vom und zum UI** für die zentralen Funk
 | Discovery starten | `POST /api/v1/action/discovery/start` | `handleDiscoveryStart` | `type` (HR/CSC) |
 | Discovery stoppen | `POST /api/v1/action/discovery/stop` | `handleDiscoveryStop` | — |
 
-**Hinweis:** Nach der Auswahl aus der Discovery-Liste ruft die UI `sensor/set` mit **nur `index`** auf. Der Backend löst Name, Typ und MAC über `BikeSensorServerGetSensor(index, ...)` aus dem Discovery-Cache auf.
+**Hinweis:** Nach der Auswahl aus der Discovery-Liste ruft die UI `sensor/set` mit `generation` und `index` auf. Die Handler stellen die Befehle nur in eine Queue; `BLERelayManager::loop()` löst Name, Typ, MAC und Adresstyp aus dem Discovery-Snapshot auf (veraltete Generation → 409).
 
 ### Backend → UI (Listen und Updates)
 
 | Quelle | WebSocket-Frame | Inhalt | Verwendung im UI |
 |--------|----------------|--------|------------------|
-| Snapshot beim Connect / alle ~30 s | `SENSORS_SNAPSHOT` (0x02) | `[count][sensor1:84]…` pro Sensor: name(64), type(1), mac(17), connected(1), battery(1) | Sensor-Übersicht, HR-Widget-Name, verbundene Sensoren-Liste |
+| Snapshot beim Connect / alle ~30 s | `SENSORS_SNAPSHOT` (0x02) | `[count][sensor1:84]…[status…]` pro Sensor: name(64), type(1), mac(17), connected(1), battery(1); danach je 1 Status-Byte (1 = Duplikat) | Sensor-Übersicht, HR-Widget-Name, verbundene Sensoren-Liste |
 | Einzelupdate | `SENSOR_CONN_STATE` (0x03) | `[name_len][name][connected]` | Status „Connected“/„Disconnected“ pro Sensor |
-| Nach Discovery-Ende | `DISCOVERY_RESULTS` (0x05) | `[count][index, name_len, name]…` | Liste „Sensoren suchen“; Auswahl → Aufruf `sensor/set?index=…` |
+| Nach Discovery-Ende | `DISCOVERY_RESULTS` (0x05) | `[count][generation:u32][index, name_len, name]…` | Liste „Sensoren suchen“; Auswahl → Aufruf `sensor/set?generation=…&index=…` |
 
 **Referenz:** [05_APIS.md](./05_APIS.md) (Sensor Actions, SENSORS_SNAPSHOT, SENSOR_CONN_STATE), [SENSORS_SNAPSHOT_USAGE_ANALYSIS.md](./SENSORS_SNAPSHOT_USAGE_ANALYSIS.md).
 

@@ -114,30 +114,28 @@ Remove a sensor from configuration and disconnect it.
 
 #### Set/Add Sensor
 ```
-POST /api/v1/action/sensor/set?name=<sensor-name>&type=<sensor-type>&mac=<mac-address>&addrType=<addr-type>
-POST /api/v1/action/sensor/set?index=<discovery-cache-index>
+POST /api/v1/action/sensor/set?generation=<discovery-generation>&index=<discovery-index>[&force=1]
 ```
-Add or update a sensor configuration. The sensor will be automatically connected when found.
+Save a sensor from the discovery list. The request is queued; the main loop resolves name, type, MAC and address type from the discovery snapshot, saves NVS and adds the sensor to the BLE library.
 
-**Parameters (manual)**:
-- `name` (required if no index): Sensor name/identifier
-- `type` (required if no index): Sensor type (`HR` or `CSC`)
-- `mac` (optional): MAC address for faster reconnection (format: `XX:XX:XX:XX:XX:XX`)
-- `addrType` (optional): BLE address type (`0` = Public, `1` = Random, `-1` = Unknown/auto-detect)
+**Parameters**:
+- `generation` (required since 1.6.0): `generation` from the `DISCOVERY_RESULTS` frame the index came from.
+- `index` (required): Index from `DISCOVERY_RESULTS`. Use `index=-1` to cancel.
+- `force` / `forceApply` (optional): `1` = disconnect a connected sensor of the same type now; otherwise the change applies after it disconnects.
 
-**Parameters (from discovery list)**:
-- `index` (optional): Discovery cache index from `DISCOVERY_RESULTS`; backend resolves name, type, MAC via `BikeSensorServerGetSensor(index, ...)`. Use `index=-1` to cancel.
+A sensor without a name is stored with its MAC as name. If the other sensor type already uses the MAC, the sensor is saved but not active; `SENSORS_SNAPSHOT` reports it as duplicate.
 
 **Response**: `"OK"` or `"ERR:<message>"`
 
 **Status Codes**:
-- `200 OK`: Success
+- `200 OK`: Queued
 - `400 Bad Request`: Missing or invalid parameters
-- `503 Service Unavailable`: System not ready
+- `409 Conflict`: Generation or index not in the current discovery snapshot, or maintenance active
+- `503 Service Unavailable`: System not ready or command queue full
 
 **Example**:
 ```
-POST /api/v1/action/sensor/set?name=TICKR%20FIT&type=HR&mac=00:1A:2B:3C:4D:5E&addrType=0
+POST /api/v1/action/sensor/set?generation=3&index=0
 ```
 
 ---
@@ -185,9 +183,11 @@ POST /api/v1/action/discovery/start?type=<sensor-type>
 Start BLE sensor discovery.
 
 **Parameters**:
-- `type` (required): Sensor type (`HR` or `CSC`)
+- `type` (optional): Sensor type (`HR` or `CSC`); empty = both
 
-**Response**: `"OK"` or `"ERR:<message>"`
+**Response**: `"OK"` (request queued) or `"ERR:<message>"`
+
+**Note (1.6.0)**: The start runs on the main loop. If a discovery is still open, the start is refused and `DISCOVERY_STATUS` reports `error=1` (busy); the HTTP status stays 200. Results arrive in `DISCOVERY_RESULTS` with a new `generation`.
 
 ---
 
@@ -320,11 +320,18 @@ Check GitHub for latest firmware release.
 ```
 POST /api/v1/action/firmware/download
 ```
-Download firmware from GitHub (async).
+Download firmware from GitHub (async). Only accepted in `ready_to_update`.
 
-**Response**: `"OK"` (download started) or `"ERR:<message>"`
+Admission enters maintenance (reason `ota`): the main loop stops fans, the HR adapter and BLE (discovery, scans, sensors) before the worker starts the download (`state=quiescing`). If that does not finish within 15 s the download does not start and the state becomes `restart_required`.
 
-**Progress**: Reported via WebSocket `FIRMWARE_PROGRESS` frame.
+**Response**: `202` `{"ok":true,"job":"ota","state":"quiescing"}`
+
+**Status Codes**:
+- `202 Accepted`: Download admitted (also when it was already admitted)
+- `409 Conflict`: `{"ok":false,"error":"not_ready_to_update"}` or `{"ok":false,"error":"maintenance_active"}` (other maintenance running)
+- `503 Service Unavailable`: System not ready or OTA not available
+
+**Progress**: Reported via WebSocket `FIRMWARE_PROGRESS` frame and the status endpoint.
 
 ---
 
@@ -348,6 +355,8 @@ Abort current firmware update operation.
 
 **Response**: `"OK"` or `"ERR:<message>"`
 
+**Note (1.6.0)**: After a download was admitted, abort never returns to `idle`: during `quiescing` the download is cancelled, during `downloading` the transfer is stopped; both end in `restart_required`. Repeated aborts return `OK`.
+
 ---
 
 #### Firmware Status
@@ -365,7 +374,10 @@ remote_version=<version>       (if available, max 32 chars)
 truncated=1                    (if response was truncated)
 ```
 
-**States**: `idle`, `searching`, `ready_to_update`, `downloading`, `installing`, `error`, `unavailable`, `disabled`
+**States**: `idle`, `searching`, `ready_to_update`, `quiescing`, `downloading`, `installing`, `aborted`, `error`, `restart_required`, `unavailable`, `disabled`
+
+- `quiescing` (1.6.0): download admitted, sensors and fans are being stopped.
+- `restart_required` (1.6.0): maintenance ended without a download (abort, timeout or error). Sensors and fans stay stopped; restart the device (`system/restart`).
 
 **Note**: 
 - Release notes are delivered via WebSocket `FIRMWARE_SEARCH_RESULT` frame (not in HTTP response)
@@ -386,7 +398,7 @@ Triggers an immediate refresh of key WebUI snapshots via WebSocket.
 
 **Parameters**:
 - `client_id` (optional): WebSocket client id (sent by server via WS control frame `CLIENT_ID (0x0C)`).
-  - If provided, heavy snapshots (`SENSORS_SNAPSHOT`, `FANS_SNAPSHOT`) are sent **unicast** to that client.
+  - If provided, heavy snapshots (`SENSORS_SNAPSHOT`, `FANS_SNAPSHOT`) are sent **unicast** to that client. The handler only records the request; the main loop sends the frames.
   - This avoids broadcast bursts under WS=2 and reduces cold-load heap spikes.
 
 **Response**: `"OK"` or `"ERR:<message>"`
@@ -425,15 +437,11 @@ truncated=1                    (if response was truncated)
 ```
 POST /api/v1/action/system/restart
 ```
-Reboot the device. No parameters. Settings are preserved.
+Reboot the device. No parameters. Settings are preserved. Also allowed during maintenance (it is the way out of maintenance).
 
-**Response**: `"OK"` (restart initiated) or `"ERR:<message>"`
+**Response**: `202` `{"ok":true,"job":"restart"}`
 
-**Status Codes**:
-- `200 OK`: Success
-- `503 Service Unavailable`: System not ready
-
-**Note**: Response is sent before reboot. The device restarts shortly after.
+**Note**: The main loop restarts the device about 250 ms after the response.
 
 ---
 
@@ -443,12 +451,13 @@ POST /api/v1/action/system/wifi_reset
 ```
 Clear WiFi credentials (NVS) and reboot. Other settings (sensors, fans, etc.) are preserved. Available only when using the WML WiFi backend (Production mode).
 
-**Implementation**: Uses `WiFiManagerLite::factoryReset(clearCallback, true)`; WML clears credentials via callback and schedules the restart.
+**Implementation**: The handler queues the reset; the main loop calls `WiFiManagerLite::factoryReset(clearCallback, true)`, which clears the credentials and schedules the restart.
 
-**Response**: `application/json` `{"ok":true,"rebooting":true}` (reset initiated) or `"ERR:<message>"`
+**Response**: `202` `{"ok":true,"job":"wifi_reset","rebooting":true}`
 
 **Status Codes**:
-- `200 OK`: Success
+- `202 Accepted`: Reset queued
+- `409 Conflict`: Maintenance active
 - `503 Service Unavailable`: System not ready, or WiFi reset not available (e.g. fixed WiFi backend)
 
 **Note**: Device restarts shortly after. On boot, WiFi setup portal (AP) is shown until new credentials are configured.
@@ -461,24 +470,29 @@ POST /api/v1/action/system/factory_reset
 ```
 Clear all settings and reboot.
 
-**Response**: `application/json` `{"ok":true,"rebooting":true}` (reset initiated) or `"ERR:<message>"`
+Enters maintenance (reason `factory_reset`). After the main loop has stopped fans and BLE, it clears the Preferences namespace `homewind` (sensors, fans, HR settings) and, with the WML backend, the WiFi credentials (`hwwifi`), then reboots. If stopping fails, nothing is erased and the status shows `restart_required`.
 
-**Note**: Enters maintenance mode, clears settings, and reboots.
+**Response**: `202` `{"ok":true,"job":"factory_reset"}`
+
+**Status Codes**:
+- `202 Accepted`: Admitted (also when already admitted)
+- `409 Conflict`: Other maintenance running (e.g. OTA download)
+
+**Result**: Only known after the reboot: `maintenance/status` reports `factory_reset.attempted` and `factory_reset.failed_mask` (bit 0 settings, bit 1 WiFi).
 
 ---
 
 ### Maintenance Mode (Debug)
 
+Maintenance is one-way since 1.6.0: once admitted, BLE and fans stay stopped until reboot.
+
 #### Begin Maintenance Mode
 ```
-POST /api/v1/action/system/maintenance/begin?reason=<ota|factory_reset>
+POST /api/v1/action/system/maintenance/begin
 ```
-Begin maintenance mode (debug endpoint).
+Begin manual maintenance (debug endpoint, reason `manual`). The `reason` parameter is ignored; OTA and factory reset have their own endpoints.
 
-**Parameters**:
-- `reason` (optional): Maintenance reason (`ota`, `factory_reset`)
-
-**Response**: `"OK"` or `"ERR:<message>"`
+**Response**: `202` `{"ok":true,"job":"maintenance"}`; `409` `{"ok":false,"error":"maintenance_active"}` if another reason is active.
 
 ---
 
@@ -486,9 +500,24 @@ Begin maintenance mode (debug endpoint).
 ```
 POST /api/v1/action/system/maintenance/end
 ```
-End maintenance mode (debug endpoint).
+No-op since 1.6.0: maintenance ends with a reboot (`system/restart`).
 
-**Response**: `"OK"` or `"ERR:<message>"`
+**Response**: `409` `{"ok":false,"error":"restart_required"}`
+
+---
+
+#### Maintenance Status
+```
+GET /api/v1/action/system/maintenance/status
+```
+**Response** (`application/json`):
+```
+{"state":"idle|requested|stopping_discovery|stopping_scans|removing|acked|failed",
+ "reason":"none|ota|factory_reset|manual","result":"pending|ack|failed|aborted",
+ "restart_required":false,
+ "factory_reset":{"attempted":1,"failed_mask":0}}
+```
+`factory_reset` is present only after a reboot that followed a factory reset.
 
 ---
 

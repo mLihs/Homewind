@@ -45,7 +45,7 @@
     heartRate: 0,
     firmwareVersion: "",
     firmwareProgress: 0,
-    discovery: { active: false, type: null, results: [] },
+    discovery: { active: false, type: null, results: [], generation: 0 },
   };
 
   // ---- DOM helpers (tiny, no framework) ----
@@ -151,6 +151,7 @@
           MAC: s.mac,
           connected: s.connected,
           battery: s.battery,
+          duplicate: s.duplicate,
         }));
       }
       
@@ -374,7 +375,12 @@
             mac: mac,
             connected,
             battery: (batteryRaw === 255) ? null : batteryRaw,
+            duplicate: false,
           });
+        }
+        // Optional status block (1.6.0): one byte per record, 1 = duplicate MAC
+        if (off + list.length <= u8.length) {
+          list.forEach((s, i) => { s.duplicate = u8[off + i] === 1; });
         }
         applySensorsSnapshot(list);
         return;
@@ -429,8 +435,10 @@
       }
 
       case FRAME.DISCOVERY_RESULTS: {
-        if (u8.length < off + 1) return;
+        // [count:uint8][generation:uint32][index:uint8][name_len:uint8][name]...
+        if (u8.length < off + 5) return;
         const count = u8[off]; off += 1;
+        state.discovery.generation = u32(dv, off); off += 4;
         const results = [];
         for (let i = 0; i < count; i++) {
           if (off >= u8.length) break;
@@ -450,7 +458,12 @@
         // optional adapter (currently no dedicated UI hook in app.js)
         if (u8.length < off + 2) return;
         state.discovery.active = u8[off] !== 0; off += 1;
-        state.discovery.type = SENSOR_TYPE_REV[u8[off]] || null;
+        state.discovery.type = SENSOR_TYPE_REV[u8[off]] || null; off += 1;
+        // Optional error byte (1.6.0): 1 = busy, the start was refused → "no sensors found"
+        if (off < u8.length && u8[off] === 1 && !state.discovery.active &&
+            window.BLESensorManager && typeof window.BLESensorManager.handleDiscoveryResult === "function") {
+          window.BLESensorManager.handleDiscoveryResult([]);
+        }
         return;
       }
 
@@ -617,7 +630,11 @@
     connectSensor: (idOrName) => httpPost("/api/v1/action/sensor/connect", { name: idOrName }),
     disconnectSensor: (idOrName) => httpPost("/api/v1/action/sensor/disconnect", { name: idOrName }),
     deleteSensor: (idOrName) => httpPost("/api/v1/action/sensor/delete", { name: idOrName }),
-    setSensor: (index) => httpPost("/api/v1/action/sensor/set", { index: index }),
+    // generation ties the index to the DISCOVERY_RESULTS it came from (stale → 409)
+    setSensor: (index) => httpPost("/api/v1/action/sensor/set", {
+      generation: state.discovery.generation,
+      index: index,
+    }),
     reloadSensors: () => httpPost("/api/v1/action/sensor/reload", {}),
     pauseBLERelayServer: () => httpPost("/api/v1/action/sensor/server/pause", {}),
     resumeBLERelayServer: () => httpPost("/api/v1/action/sensor/server/resume", {}),
@@ -1568,8 +1585,9 @@ window.startRebootMonitoring = function (options) {
   }
 
   function isInProgressState(state) {
-    // Firmware update states that indicate "do NOT reload yet".
-    return state === "searching" || state === "downloading" || state === "installing";
+    // Firmware update states that indicate "do NOT reload yet" (restart_required: reboot not started yet).
+    return state === "searching" || state === "quiescing" || state === "downloading" ||
+           state === "installing" || state === "restart_required";
   }
 
   function withTimestamp(url) {
@@ -3638,7 +3656,7 @@ window.startRebootMonitoring = function (options) {
         [STATE.DOWNLOADING]: [STATE.RESTARTING, STATE.ERROR], // Skip INSTALLING for ESP32-OTA
         [STATE.INSTALLING]: [STATE.RESTARTING, STATE.ERROR],  // Keep for backward compatibility
         [STATE.RESTARTING]: [STATE.IDLE, STATE.ERROR],
-        [STATE.ERROR]: [STATE.IDLE],
+        [STATE.ERROR]: [STATE.IDLE, STATE.RESTARTING], // RESTARTING: "restart_required" → Restart button
         [STATE.ABORTED]: [STATE.IDLE]
       };
 
@@ -3851,9 +3869,10 @@ window.startRebootMonitoring = function (options) {
      * @returns {void}
      * @private
      */
-    function openError(message) {
+    function openError(message, options) {
       stopFirmwareStatusPolling();
       setState(STATE.ERROR);
+      const restartRequired = !!(options && options.restartRequired);
 
       // Extract error message from various formats
       let errorText = "An error occurred during the software update.";
@@ -3900,6 +3919,28 @@ window.startRebootMonitoring = function (options) {
         errorContent += `</div>`;
       }
 
+      if (restartRequired) {
+        errorContent += `<p class="fw-modal-notes">Sensors and fans stay stopped until the device restarts.</p>`;
+      }
+
+      const buttons = [
+        {
+          type: "cancel",
+          label: "Close",
+          className: "btn btn-regular btn-tertiary",
+          closeOnClick: true,
+        },
+      ];
+      if (restartRequired) {
+        buttons.push({
+          type: "save",
+          label: "Restart",
+          className: "btn btn-regular btn-cta",
+          closeOnClick: false,
+          onClick: () => { restartDevice(); return true; },
+        });
+      }
+
       AppModal.open({
         title: "Error During Software Update",
         icon: "--icon-error-svg-data",
@@ -3908,14 +3949,7 @@ window.startRebootMonitoring = function (options) {
             ${errorContent}
           </div>
         `,
-        buttons: [
-          {
-            type: "cancel",
-            label: "Close",
-            className: "btn btn-regular btn-tertiary",
-            closeOnClick: true,
-          },
-        ],
+        buttons,
       });
       // Reconnect WebSocket after error (e.g. after download failed) so UI works without page reload
       if (window.ApiV1 && typeof window.ApiV1.wsConnect === "function") {
@@ -4050,6 +4084,13 @@ window.startRebootMonitoring = function (options) {
             const state = params.state || "";
             const progress = Math.max(0, Math.min(100, parseInt(params.progress, 10) || 0));
 
+            // "quiescing": sensors/fans are being stopped before the download; keep polling.
+            if (state === "restart_required" || state === "aborted") {
+              stopFirmwareStatusPolling();
+              openError(params.error || "The update was stopped. Restart the device to continue.",
+                        { restartRequired: true });
+              return;
+            }
             if (state === "error") {
               stopFirmwareStatusPolling();
               openError(params.error || "Update failed");
@@ -4383,6 +4424,31 @@ window.startRebootMonitoring = function (options) {
       });
       startRebootMonitoringForRestart();
     }
+
+    /**
+     * ERROR with "restart_required" → RESTARTING: maintenance ends only with a reboot.
+     * A dropped connection is expected (device restarts), so monitoring starts either way.
+     * @private
+     */
+    function restartDevice() {
+      setState(STATE.RESTARTING);
+      AppModal.open({
+        title: "Restarting Device",
+        icon: "--icon-spinner-svg-data",
+        content: `
+          <div class="fw-modal">
+            <p class="modal-text">
+              The device is restarting. The page will reload automatically.
+            </p>
+          </div>
+        `,
+        buttons: [],
+        actions: false,
+      });
+      fetch("/api/v1/action/system/restart", { method: "POST" })
+        .catch(() => {})
+        .finally(() => startRebootMonitoringForRestart());
+    }
     
     /**
      * Monitors for device reboot during RESTARTING state.
@@ -4600,6 +4666,7 @@ const BLESensorManager = (function () {
         MAC: s.mac || '',
         Connected: s.connected || false,
         Battery: s.battery !== undefined ? s.battery : null,
+        Duplicate: !!s.duplicate,
         id: s.id || s.name
       })));
     }
@@ -4635,7 +4702,8 @@ const BLESensorManager = (function () {
             const isConnected = sensor.Connected || false;
             const battery = sensor.Battery !== undefined && sensor.Battery !== null ? `${sensor.Battery}%` : "N/A";
             const statusClass = isConnected ? "sensor-status-connected" : "sensor-status-disconnected";
-            const statusText = isConnected ? "Connected" : "Disconnected";
+            // Duplicate: the other sensor type already uses this MAC; not added to the library
+            const statusText = sensor.Duplicate ? "Duplicate (used by other sensor)" : (isConnected ? "Connected" : "Disconnected");
             return `<div class="sensor-tile ${statusClass}" data-type="${window.escapeHtml(type)}" data-name="${window.escapeHtml(sensor.Name)}"><div class="sensor-info"><div class="sensor-icon ${iconClass}"></div><div class="sensor-text"><div class="sensor-name">${name}</div><div class="sensor-status"><span class="sensor-battery">Battery: ${battery}</span><span class="sensor-conn-indicator">${statusText}</span></div></div></div><button class="btn btn-small btn-tertiary sensor-remove-btn" type="button">Remove</button></div>`;
           }
           return `<div class="sensor-tile" data-type="${window.escapeHtml(type)}"><div class="sensor-info"><div class="sensor-icon ${iconClass}"></div><div class="sensor-text"><div class="sensor-name">No ${getSensorTypeLabel(type)} Sensor Connected</div></div></div><button class="btn btn-small btn-cta sensor-add-btn" type="button">Add</button></div>`;
@@ -4862,6 +4930,7 @@ const BLESensorManager = (function () {
         Name: sensorData.name || configuredSensors[index].Name,
         Connected: sensorData.connected !== undefined ? sensorData.connected : configuredSensors[index].Connected,
         Battery: sensorData.battery !== undefined ? sensorData.battery : configuredSensors[index].Battery,
+        Duplicate: sensorData.duplicate !== undefined ? !!sensorData.duplicate : configuredSensors[index].Duplicate,
         _apiId: sensorData.id || id
       };
     } else if (sensorData.name) {
@@ -4872,6 +4941,7 @@ const BLESensorManager = (function () {
         MAC: sensorData.mac || '',
         Connected: sensorData.connected || false,
         Battery: sensorData.battery,
+        Duplicate: !!sensorData.duplicate,
         _apiId: sensorData.id || id
       });
     }
@@ -5017,6 +5087,7 @@ if (document.readyState === "loading") {
   const WIFI_RESET_API_ENDPOINT = "/api/v1/action/system/wifi_reset";
   const FACTORY_RESET_API_ENDPOINT = "/api/v1/action/system/factory_reset";
   const DEVICE_RESTART_API_ENDPOINT = "/api/v1/action/system/restart";
+  const MAINTENANCE_STATUS_API_ENDPOINT = "/api/v1/action/system/maintenance/status";
   let isRestarting = false;
 
   /**
@@ -5296,15 +5367,16 @@ if (document.readyState === "loading") {
         return response.json();
       })
       .then((data) => {
-        // Success - show message and start monitoring
+        // Accepted: the device stops sensors/fans, erases and reboots.
+        // Success is only known after the reboot (maintenance status report).
         isRestarting = true;
         AppModal.open({
-          title: "Factory Reset Complete",
-          icon: "--icon-checked-filled-svg-data",
+          title: "Performing Factory Reset...",
+          icon: "--icon-spinner-svg-data",
           content: `
             <div class="modal-content-centered">
               <p class="modal-text">
-                All settings have been reset. The device is restarting...
+                Erasing settings. The device is restarting...
               </p>
             </div>
           `,
@@ -5312,7 +5384,13 @@ if (document.readyState === "loading") {
           actions: false,
         });
 
-        beginRebootMonitoring();
+        window.startRebootMonitoring({
+          isActive: () => isRestarting,
+          onSuccess: () => {
+            isRestarting = false;
+            showFactoryResetReport();
+          },
+        });
       })
       .catch((error) => {
         isRestarting = false;
@@ -5323,6 +5401,54 @@ if (document.readyState === "loading") {
           }, {
             title: "Factory Reset Failed",
             buttonLabel: "Close"
+          });
+        }
+      });
+  }
+
+  /**
+   * After the reboot: reads the factory-reset report from maintenance status
+   * ({attempted, failed_mask}; bit 0 settings, bit 1 WiFi) and shows the result.
+   * @private
+   */
+  function showFactoryResetReport() {
+    fetch(MAINTENANCE_STATUS_API_ENDPOINT, { method: "GET", cache: "no-store" })
+      .then((response) => (response.ok ? response.json() : Promise.reject(new Error("HTTP " + response.status))))
+      .then((data) => {
+        const report = data && data.factory_reset;
+        if (report && report.attempted && report.failed_mask === 0) {
+          AppModal.open({
+            title: "Factory Reset Complete",
+            icon: "--icon-checked-filled-svg-data",
+            content: `
+              <div class="modal-content-centered">
+                <p class="modal-text">All settings have been reset.</p>
+              </div>
+            `,
+            buttons: [{
+              type: "save",
+              label: "Reload Page",
+              className: "btn btn-regular btn-primary",
+              closeOnClick: false,
+              onClick: () => { window.location.reload(); return true; },
+            }],
+          });
+          return;
+        }
+        const failed = [];
+        if (report && (report.failed_mask & 1)) failed.push("settings");
+        if (report && (report.failed_mask & 2)) failed.push("WiFi");
+        throw new Error(failed.length ? "Could not erase: " + failed.join(", ") : "No reset report after reboot");
+      })
+      .catch((error) => {
+        if (typeof window.showErrorModal === "function") {
+          window.showErrorModal({
+            message: "The factory reset did not complete.",
+            reason: error.message || "Please try again."
+          }, {
+            title: "Factory Reset Failed",
+            buttonLabel: "Close",
+            onClose: () => window.location.reload()
           });
         }
       });

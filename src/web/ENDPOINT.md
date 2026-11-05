@@ -80,7 +80,8 @@ All action endpoints use **POST** with query parameters or form-urlencoded data.
 | POST | `/api/v1/action/system/wifi_reset` | WiFi reset (clear WiFi, reboot; WML only) |
 | POST | `/api/v1/action/system/factory_reset` | Factory reset (clear all, reboot) |
 | POST | `/api/v1/action/system/maintenance/begin` | Begin maintenance mode (debug) |
-| POST | `/api/v1/action/system/maintenance/end` | End maintenance mode (debug) |
+| POST | `/api/v1/action/system/maintenance/end` | No-op since 1.6.0 (409, maintenance ends with a reboot) |
+| GET | `/api/v1/action/system/maintenance/status` | Maintenance state, `restart_required`, factory-reset report (JSON) |
 
 **Response Format**: `text/plain` (no JSON) for most; action endpoints return `"OK"` or `"ERR:..."`
 

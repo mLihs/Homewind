@@ -105,18 +105,11 @@ public:
   uint8_t getClientCount() const;
   
   /**
-   * Force immediate flush of a specific frame type
-   * Builds and sends the frame immediately (safe to call from main loop context)
-   * @param frameType Frame type to send immediately
+   * Request SENSORS + FANS snapshots for one client (unicast).
+   * Safe from any task: only records the client id; loopFlush() builds and sends.
+   * Avoids broadcasting heavy snapshots in multi-client scenarios.
    */
-  void flushFrame(TelemetryFrameType frameType);
-
-  /**
-   * Send a frame to a specific client (unicast).
-   * Useful for multi-client scenarios where broadcasting heavy snapshots
-   * (SENSORS/FANS) would cause burst allocations and heap fragmentation.
-   */
-  void sendFrameToClient(uint32_t clientId, TelemetryFrameType frameType);
+  void requestSnapshotsForClient(uint32_t clientId);
   
   /**
    * Get WebSocket instance (for integration)
@@ -162,8 +155,13 @@ private:
   uint8_t stagedConnectPhase;
   unsigned long stagedConnectStartMs;
   uint32_t stagedConnectTargetClientId;
+
+  // Per-client snapshot requests (any task writes under the mux, loopFlush drains)
+  static const uint8_t SNAPSHOT_REQUEST_SLOTS = 4;
+  portMUX_TYPE snapshotRequestMux;
+  uint32_t snapshotRequests[SNAPSHOT_REQUEST_SLOTS];  // 0 = free
   
-  // Frame building buffers (static to avoid heap allocation)
+  // Frame building buffers (static to avoid heap allocation; loop task only)
   static const size_t MAX_FRAME_SIZE = 512; // Max frame payload size (largest frame ~200 bytes)
   uint8_t frameBuffer[MAX_FRAME_SIZE];
   
@@ -182,16 +180,16 @@ private:
   void sendFrame(TelemetryFrameType frameType, const uint8_t* payload, size_t payloadLen);
 
   /**
-   * Build and send a frame to a single client (unicast).
+   * Build and send a frame to a single client (unicast). Loop task only.
    * Used for connect snapshots to avoid binaryAll() bursts when 2+ clients are connected.
    */
-  void buildAndSendFrameToClient(uint32_t clientId, TelemetryFrameType frameType);
+  void emitFrameToClient(uint32_t clientId, TelemetryFrameType frameType);
   
   /**
-   * Build and send frame for given type
+   * Build and send frame for given type. Loop task only.
    * @param frameType Frame type to build and send
    */
-  void buildAndSendFrame(TelemetryFrameType frameType);
+  void emitFrame(TelemetryFrameType frameType);
   
   /**
    * Build SYSTEM_STATUS frame (snapshot)

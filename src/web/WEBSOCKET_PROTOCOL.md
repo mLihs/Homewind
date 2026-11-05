@@ -35,7 +35,7 @@ Total: 12 bytes
 
 **Payload:**
 ```
-[count:uint8][sensor1:84][sensor2:84][sensor3:84]
+[count:uint8][sensor1:84]...[sensorN:84][status1:uint8]...[statusN:uint8]
 ```
 
 **Sensor entry (fixed 84 bytes):**
@@ -49,8 +49,9 @@ Total: 12 bytes
 - `mac`: MAC address string (fixed 17 bytes, null-terminated, null-padded, format "XX:XX:XX:XX:XX:XX")
 - `connected`: Connection status (0 = disconnected, 1 = connected)
 - `battery`: Battery level in percent (0-100, 255 = unknown)
+- `status` (since 1.6.0, one byte per entry, after all entries): 0 = ok, 1 = duplicate (the other sensor type already uses this MAC; the sensor is saved but not active). Decoders that stop after `count` entries ignore it.
 
-**Note:** Fixed-size encoding prevents heap fragmentation from variable WebSocket allocations. Each sensor entry is exactly 84 bytes, so frame size is predictable: 1 + count×84 bytes (max 253 bytes for 3 sensors).
+**Note:** Fixed-size encoding prevents heap fragmentation from variable WebSocket allocations. Each sensor entry is exactly 84 bytes, so frame size is predictable: 1 + count×85 bytes (max 171 bytes for 2 sensors).
 
 #### FANS_SNAPSHOT (0x07) - All Configured Fans
 
@@ -93,7 +94,7 @@ Sent by the server to the connecting client. The WebUI can then call:
 
 - `POST /api/v1/action/telemetry/refresh?client_id=<id>`
 
-to request **unicast** delivery of heavy snapshots (`SENSORS_SNAPSHOT`, `FANS_SNAPSHOT`) without triggering broadcast bursts.
+to request **unicast** delivery of heavy snapshots (`SENSORS_SNAPSHOT`, `FANS_SNAPSHOT`) without triggering broadcast bursts. The handler only records the request; the frames follow from the main loop.
 
 **Payload:**
 ```
@@ -129,17 +130,18 @@ Sent only when state changes (marked dirty).
 
 **Payload:**
 ```
-[active:uint8][type:uint8]
+[active:uint8][type:uint8][error:uint8]
 ```
 
 - `active`: Discovery active status (0 = stopped, 1 = active)
-- `type`: Sensor type being discovered (0 = HR, 1 = CSC, 2 = PWR)
+- `type`: Sensor type being discovered (0 = HR, 1 = CSC, 2 = PWR, 255 = all/unknown)
+- `error` (since 1.6.0, optional for decoders): 0 = none, 1 = busy (the last start was refused because a discovery was still open). `discovery/start` answers 200 once the request is queued; a refusal is only reported here.
 
 #### DISCOVERY_RESULTS (0x05) - Discovery Results
 
 **Payload:**
 ```
-[count:uint8][result1...resultN]
+[count:uint8][generation:uint32][result1...resultN]
 ```
 
 **Result entry:**
@@ -147,12 +149,13 @@ Sent only when state changes (marked dirty).
 [index:uint8][name_len:uint8][name:bytes]
 ```
 
-- `count`: Number of discovered devices
-- `index`: Discovery cache index (used to fetch full sensor data from backend)
+- `count`: Number of entries in this frame (the frame truncates at 512 bytes)
+- `generation` (since 1.6.0, little-endian): identifies the discovery run. **Breaking change:** it sits before the entries, so pre-1.6.0 decoders misread this frame; the WebUI is shipped with the firmware.
+- `index`: Discovery snapshot index
 - `name_len`: Device name length
-- `name`: Device name (UTF-8, for UI display only)
+- `name`: Device name (UTF-8, for UI display only). A device without a name is shown with its MAC (`aa:bb:cc:dd:ee:ff`), the same text that is stored when it is selected.
 
-**Note:** This frame format is optimized to reduce WebSocket bandwidth. The UI only receives index + name. When the user selects a sensor, the UI sends the index back to the backend, which resolves the full sensor data (type, MAC, addrType) from the discovery cache using `BikeSensorServerGetSensor(index)`.
+**Note:** This frame format is optimized to reduce WebSocket bandwidth. The UI only receives index + name. When the user selects a sensor, the UI posts `sensor/set?generation=<generation>&index=<index>`; the main loop resolves type, MAC and address type from the same discovery snapshot. A generation or index that no longer matches is rejected with 409.
 
 #### FIRMWARE_VERSION (0x08) - Firmware Version Update
 

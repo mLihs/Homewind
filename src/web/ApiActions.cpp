@@ -11,9 +11,6 @@
 #if HOMEWIND_ENABLE_API_ACTIONS
 
 #include <string.h>
-#include <ESP.h>
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
 #include "../core/SystemState.h"
 #include "../core/TextUtil.h"
 #include "../app/BuildInfo.h"
@@ -27,32 +24,8 @@
 extern WebSocketTelemetry* g_webSocketTelemetry;
 #endif
 
-#if HOMEWIND_ENABLE_SETTINGS
-#include "../settings/SettingsStore.h"
-// Static pointer for factory reset access
-static SettingsStore* s_settingsStore = nullptr;
-
-void ApiActions::setSettingsStore(void* store) {
-  s_settingsStore = static_cast<SettingsStore*>(store);
-}
-#endif
-
-#if HW_ENABLE_WIFI && HW_WIFI_BACKEND_WML
-#include "../wifi/WiFiServiceWML.h"
-static WiFiServiceWML* s_wifiServiceWML = nullptr;
-#endif
-
-void ApiActions::setWiFiServiceWML(void* wml) {
-#if HW_ENABLE_WIFI && HW_WIFI_BACKEND_WML
-  s_wifiServiceWML = static_cast<WiFiServiceWML*>(wml);
-#else
-  (void)wml;
-#endif
-}
-
 #if HW_ENABLE_BLE
 #include "../core/BLERelayManager.h"
-#include <BluetoothBikeSensorServer.h>
 // Forward declaration - will be set by App
 extern BLERelayManager* g_bleRelayManager;
 #endif
@@ -71,55 +44,6 @@ extern FanController* g_fanController;
 #include "../core/FirmwareUpdateManager.h"
 // Forward declaration - will be set by App
 extern FirmwareUpdateManager* g_firmwareUpdateManager;
-
-// Download waiter task context (for sync download endpoint)
-struct DlWaitCtx {
-  AsyncWebServerRequest* req;
-  FirmwareUpdateManager* mgr;
-  uint32_t seq;
-  uint32_t startMs;
-};
-
-// Waiter task trampoline for sync download
-static void DlWaiterTrampoline(void* arg) {
-  DlWaitCtx* ctx = static_cast<DlWaitCtx*>(arg);
-  if (!ctx || !ctx->req || !ctx->mgr) {
-    if (ctx) {
-      delete ctx;
-    }
-    vTaskDelete(nullptr);
-    return;
-  }
-  
-  // Wait for download completion with timeout (4 minutes)
-  const uint32_t timeoutMs = 240000;  // 4 minutes
-  bool ok = false;
-  String error;
-  
-  bool completed = ctx->mgr->waitDownloadDone(ctx->seq, timeoutMs, &ok, &error);
-  
-  // Note: We already sent 202 Accepted from the handler to prevent ESPAsyncWebServer
-  // from sending 501. We can't send another response here because the connection
-  // may have been closed or ESPAsyncWebServer may not allow multiple responses.
-  // The UI should poll /api/v1/action/firmware/status to get the final result.
-  // The download itself is synchronous (waits for completion), but the HTTP response
-  // is async (202 immediately) due to ESPAsyncWebServer limitations.
-  
-  // Log the result for debugging
-  if (completed) {
-    if (ok) {
-      HW_DEBUG_PRINTLN("[ApiActions] Download completed successfully (device may reboot)");
-    } else {
-      HW_DEBUG_PRINTF("[ApiActions] Download failed: %s\n", error.c_str());
-    }
-  } else {
-    HW_DEBUG_PRINTLN("[ApiActions] Download wait timeout");
-  }
-  
-  // Cleanup
-  delete ctx;
-  vTaskDelete(nullptr);
-}
 #endif
 
 #if HW_ENABLE_WEB
@@ -142,7 +66,9 @@ static bool isWhitelistedDuringMaintenance(const char* path) {
     strcmp(path, "/api/v1/action/firmware/search") == 0 ||
     strcmp(path, "/api/v1/action/system/maintenance/begin") == 0 ||
     strcmp(path, "/api/v1/action/system/maintenance/end") == 0 ||
-    strcmp(path, "/api/v1/action/system/factory_reset") == 0;
+    strcmp(path, "/api/v1/action/system/maintenance/status") == 0 ||
+    strcmp(path, "/api/v1/action/system/factory_reset") == 0 ||
+    strcmp(path, "/api/v1/action/system/restart") == 0;
 }
 
 
@@ -247,6 +173,7 @@ void ApiActions::registerRoutes(void* serverPtr) {
   // Maintenance mode debug endpoints (whitelisted by definition - no gate wrapper)
   server->on("/api/v1/action/system/maintenance/begin", HTTP_POST, handleMaintenanceBegin);
   server->on("/api/v1/action/system/maintenance/end", HTTP_POST, handleMaintenanceEnd);
+  server->on("/api/v1/action/system/maintenance/status", HTTP_GET, handleMaintenanceStatus);
   
   // System actions
   server->on("/api/v1/action/system/factory_reset", HTTP_POST, handleFactoryReset);  // whitelisted
@@ -535,6 +462,29 @@ bool ApiActions::checkSystemReady() {
 
 // Sensor action handlers
 
+#if HW_ENABLE_BLE
+// Commands are applied by BLERelayManager::loop(); 200 = accepted, WS confirms.
+static void sendBleEnqueueResult(AsyncWebServerRequest* request, BleEnqueueResult result) {
+  switch (result) {
+    case BleEnqueueResult::ACCEPTED:
+      request->send(200, "text/plain", "OK");
+      break;
+    case BleEnqueueResult::FULL:
+      request->send(503, "text/plain", "BLE command queue full");
+      break;
+    case BleEnqueueResult::NOT_FOUND:
+      request->send(404, "text/plain", "Sensor not found");
+      break;
+    case BleEnqueueResult::STALE:
+      request->send(409, "text/plain", "Discovery result no longer valid");
+      break;
+    case BleEnqueueResult::CLOSED:
+      request->send(409, "text/plain", "Maintenance active");
+      break;
+  }
+}
+#endif
+
 void ApiActions::handleSensorConnect(AsyncWebServerRequest* request) {
   if (!checkSystemReady()) {
     sendError(request, 503, "System not ready");
@@ -562,13 +512,10 @@ void ApiActions::handleSensorConnect(AsyncWebServerRequest* request) {
   }
   
 #if HW_ENABLE_BLE
-  if (!g_bleRelayManager->connectSensor(name.c_str())) {
-    sendError(request, 500, "Failed to connect sensor");
-    return;
-  }
-#endif
-  
+  sendBleEnqueueResult(request, g_bleRelayManager->enqueueConnect(name.c_str()));
+#else
   sendSuccess(request, "OK");
+#endif
 }
 
 void ApiActions::handleSensorDisconnect(AsyncWebServerRequest* request) {
@@ -598,13 +545,10 @@ void ApiActions::handleSensorDisconnect(AsyncWebServerRequest* request) {
   }
   
 #if HW_ENABLE_BLE
-  if (!g_bleRelayManager->disconnectSensor(name.c_str())) {
-    sendError(request, 500, "Failed to disconnect sensor");
-    return;
-  }
-#endif
-  
+  sendBleEnqueueResult(request, g_bleRelayManager->enqueueDisconnect(name.c_str()));
+#else
   sendSuccess(request, "OK");
+#endif
 }
 
 void ApiActions::handleSensorDelete(AsyncWebServerRequest* request) {
@@ -634,13 +578,10 @@ void ApiActions::handleSensorDelete(AsyncWebServerRequest* request) {
   }
   
 #if HW_ENABLE_BLE
-  if (!g_bleRelayManager->deleteConfiguredSensor(name.c_str())) {
-    sendError(request, 500, "Failed to delete sensor");
-    return;
-  }
-#endif
-  
+  sendBleEnqueueResult(request, g_bleRelayManager->enqueueDelete(name.c_str()));
+#else
   sendSuccess(request, "OK");
+#endif
 }
 
 void ApiActions::handleSensorSet(AsyncWebServerRequest* request) {
@@ -671,52 +612,22 @@ void ApiActions::handleSensorSet(AsyncWebServerRequest* request) {
   }
   
 #if HW_ENABLE_BLE
-  // Validate index against discovery cache
-  uint8_t count = BikeSensorServerGetSensorCount();
-  if (index >= count) {
+  if (index > 255) {
     sendError(request, 404, "Invalid sensor index (not found in discovery cache)");
     return;
   }
-  
-  // Get sensor data from discovery cache
-  SensorType type;
-  char name[64];
-  uint8_t mac[6];
-  
-  if (!BikeSensorServerGetSensor(index, &type, name, sizeof(name), mac)) {
-    sendError(request, 500, "Failed to get sensor data from discovery cache");
+
+  // Discovery generation the index belongs to (DISCOVERY_RESULTS frame)
+  char genStr[12];
+  if (!WebHelpers::getParamToBuffer(request, "generation", genStr, sizeof(genStr), false)) {
+    sendError(request, 400, "Missing generation parameter");
     return;
   }
-  
-  // Format MAC string
-  char macStr[18];
-  snprintf(macStr, sizeof(macStr), "%02x:%02x:%02x:%02x:%02x:%02x",
-           mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-  
-  // Extract addrType from formatted list string (same logic as getDiscoveryResults)
-  int8_t addrType = -1;  // Default: Unknown
-  const char* listStr = BikeSensorServerListSensors(LIST_FORMAT_FULL);
-  if (listStr && strlen(macStr) > 0) {
-    // Find the line containing this MAC address
-    // Pattern: " (MAC) " followed by number, then \n or end of string
-    char searchPattern[25];
-    snprintf(searchPattern, sizeof(searchPattern), " (%s) ", macStr);
-    const char* macPos = strstr(listStr, searchPattern);
-    if (macPos) {
-      // Find the address type: number after " (MAC) "
-      const char* afterMac = macPos + strlen(searchPattern);
-      // Skip any spaces
-      while (*afterMac == ' ') afterMac++;
-      // Parse the number (should be 0 or 1, followed by \n or end of string)
-      if (*afterMac >= '0' && *afterMac <= '1') {
-        int parsedAddrType = (*afterMac - '0');
-        // Verify it's followed by \n, \r, \0, or space (for next line)
-        char nextChar = *(afterMac + 1);
-        if (nextChar == '\n' || nextChar == '\0' || nextChar == '\r' || nextChar == ' ') {
-          addrType = (int8_t)parsedAddrType;
-        }
-      }
-    }
+  char* end = nullptr;
+  const unsigned long generation = strtoul(genStr, &end, 10);
+  if (end == genStr || *end != '\0') {
+    sendError(request, 400, "Invalid generation parameter");
+    return;
   }
   
   // Get forceApply parameter (optional)
@@ -728,22 +639,11 @@ void ApiActions::handleSensorSet(AsyncWebServerRequest* request) {
     forceApply = (strcmp(forceStr, "true") == 0 || strcmp(forceStr, "1") == 0);
   }
   
-  // Convert SensorType to string (inline implementation to avoid private method access)
-  const char* typeStr;
-  switch (type) {
-    case SENSOR_TYPE_HEART_RATE: typeStr = "HR"; break;
-    case SENSOR_TYPE_SPEED_CADENCE: typeStr = "CSC"; break;
-    default: typeStr = "UNKNOWN"; break;
-  }
-  
-  // Set sensor using resolved data
-  if (!g_bleRelayManager->setConfiguredSensor(name, typeStr, macStr, addrType, forceApply)) {
-    sendError(request, 500, "Failed to set sensor");
-    return;
-  }
-#endif
-  
+  sendBleEnqueueResult(request, g_bleRelayManager->enqueueSetFromDiscovery(
+      static_cast<uint32_t>(generation), static_cast<uint8_t>(index), forceApply));
+#else
   sendSuccess(request, "OK");
+#endif
 }
 
 void ApiActions::handleSensorReload(AsyncWebServerRequest* request) {
@@ -758,13 +658,10 @@ void ApiActions::handleSensorReload(AsyncWebServerRequest* request) {
     return;
   }
   
-  if (!g_bleRelayManager->reloadSensors()) {
-    sendError(request, 500, "Failed to reload sensors");
-    return;
-  }
-#endif
-  
+  sendBleEnqueueResult(request, g_bleRelayManager->enqueueReload());
+#else
   sendSuccess(request, "OK");
+#endif
 }
 
 void ApiActions::handleSensorServerPause(AsyncWebServerRequest* request) {
@@ -779,13 +676,10 @@ void ApiActions::handleSensorServerPause(AsyncWebServerRequest* request) {
     return;
   }
   
-  if (!g_bleRelayManager->pauseServer()) {
-    sendError(request, 500, "Failed to pause server");
-    return;
-  }
-#endif
-  
+  sendBleEnqueueResult(request, g_bleRelayManager->requestServerPaused(true));
+#else
   sendSuccess(request, "OK");
+#endif
 }
 
 void ApiActions::handleSensorServerResume(AsyncWebServerRequest* request) {
@@ -800,13 +694,10 @@ void ApiActions::handleSensorServerResume(AsyncWebServerRequest* request) {
     return;
   }
   
-  if (!g_bleRelayManager->resumeServer()) {
-    sendError(request, 500, "Failed to resume server");
-    return;
-  }
-#endif
-  
+  sendBleEnqueueResult(request, g_bleRelayManager->requestServerPaused(false));
+#else
   sendSuccess(request, "OK");
+#endif
 }
 
 // Discovery action handlers
@@ -836,13 +727,16 @@ void ApiActions::handleDiscoveryStart(AsyncWebServerRequest* request) {
   }
   
 #if HW_ENABLE_BLE
-  if (!g_bleRelayManager->startDiscovery(type.length() > 0 ? type.c_str() : nullptr)) {
-    sendError(request, 409, "Discovery already in progress");
-    return;
+  // Empty type = both; "HR" has length 2, "CSC" length 3 (validated above)
+  uint8_t mask = hw::kBleTypeHR | hw::kBleTypeCSC;
+  if (type.length() > 0) {
+    mask = (type.length() == 2) ? hw::kBleTypeHR : hw::kBleTypeCSC;
   }
-#endif
-  
+  // "busy" (discovery already open) is reported in the DISCOVERY_STATUS frame
+  sendBleEnqueueResult(request, g_bleRelayManager->requestDiscoveryStart(mask));
+#else
   sendSuccess(request, "OK");
+#endif
 }
 
 void ApiActions::handleDiscoveryStop(AsyncWebServerRequest* request) {
@@ -857,13 +751,10 @@ void ApiActions::handleDiscoveryStop(AsyncWebServerRequest* request) {
     return;
   }
   
-  if (!g_bleRelayManager->stopDiscovery()) {
-    sendError(request, 500, "Failed to stop discovery");
-    return;
-  }
-#endif
-  
+  sendBleEnqueueResult(request, g_bleRelayManager->requestDiscoveryStop());
+#else
   sendSuccess(request, "OK");
+#endif
 }
 
 // Fan action handlers
@@ -914,6 +805,10 @@ void ApiActions::handleFanControl(AsyncWebServerRequest* request) {
   }
   
   if (!g_fanController->setFanControlState(token, active)) {
+    if (MaintenanceMode::admissionClosed()) {
+      sendError(request, 409, "Maintenance active");
+      return;
+    }
     sendError(request, 500, "Failed to set fan control state");
     return;
   }
@@ -977,6 +872,10 @@ void ApiActions::handleFanAdd(AsyncWebServerRequest* request) {
   }
   
   if (!g_fanController->addFan(token)) {
+    if (MaintenanceMode::admissionClosed()) {
+      sendError(request, 409, "Maintenance active");
+      return;
+    }
     sendError(request, 500, "Failed to add fan");
     return;
   }
@@ -1021,6 +920,10 @@ void ApiActions::handleFanUpdate(AsyncWebServerRequest* request) {
   }
   
   if (!g_fanController->updateFanToken(oldToken, newToken)) {
+    if (MaintenanceMode::admissionClosed()) {
+      sendError(request, 409, "Maintenance active");
+      return;
+    }
     sendError(request, 500, "Failed to update fan token");
     return;
   }
@@ -1063,19 +966,17 @@ void ApiActions::handleFanRemove(AsyncWebServerRequest* request) {
     return;
   }
   
-  // Do fast removal first (remove from memory, update UI)
-  // This gives instant UI feedback - fan card disappears right away
+  // Removal, library cleanup and the NVS save are queued for loop()
   if (!g_fanController->removeFanFast(token)) {
+    if (MaintenanceMode::admissionClosed()) {
+      sendError(request, 409, "Maintenance active");
+      return;
+    }
     sendError(request, 500, "Failed to remove fan");
     return;
   }
   
-  // Send response IMMEDIATELY - UI updates right away
   sendSuccess(request, "OK");
-  
-  // Now do slow operations (fan control, NVS save) after response is sent
-  // This doesn't block the UI update
-  g_fanController->removeFanCleanup(token);
 #else
   sendError(request, 503, "Fans not enabled");
 #endif
@@ -1096,7 +997,7 @@ void ApiActions::handleFirmwareSearch(AsyncWebServerRequest* request) {
     return;
   }
   
-  if (g_firmwareUpdateManager->isUpdating()) {
+  if (g_firmwareUpdateManager->isUpdating() || MaintenanceMode::admissionClosed()) {
     sendError(request, 409, "Update already in progress");
     return;
   }
@@ -1128,454 +1029,20 @@ void ApiActions::handleFirmwareDownload(AsyncWebServerRequest* request) {
     return;
   }
   
-  // Check if already busy
-  if (g_firmwareUpdateManager->isUpdating()) {
-    request->send(409, "application/json", "{\"ok\":false,\"error\":\"busy\"}");
-    return;
-  }
-  
-  // Begin sync download and get sequence number
-  uint32_t seq = 0;
-  if (!g_firmwareUpdateManager->beginDownloadSync(&seq)) {
-    // Check why it failed
-    // OPTIMIZATION: getStateString() now returns const char* (no String allocation)
-    const char* state = g_firmwareUpdateManager->getStateString();
-    if (strcmp(state, "ready_to_update") != 0) {
+  // Admission + enqueue only; the loop quiesces BLE/fans, the worker downloads
+  // after the ACK. Progress and result via firmware/status (design §7.4).
+  switch (g_firmwareUpdateManager->requestDownload()) {
+    case hw::MaintAdmit::ACCEPTED:
+    case hw::MaintAdmit::ALREADY:
+      request->send(202, "application/json", "{\"ok\":true,\"job\":\"ota\",\"state\":\"quiescing\"}");
+      return;
+    case hw::MaintAdmit::CONFLICT:
+      request->send(409, "application/json", "{\"ok\":false,\"error\":\"maintenance_active\"}");
+      return;
+    case hw::MaintAdmit::NOT_READY:
       request->send(409, "application/json", "{\"ok\":false,\"error\":\"not_ready_to_update\"}");
-    } else {
-      // Semaphore not available or other error
-      request->send(500, "application/json", "{\"ok\":false,\"error\":\"sync_not_available\"}");
-    }
-    return;
+      return;
   }
-  
-  // Create waiter task context
-  DlWaitCtx* ctx = new DlWaitCtx();
-  if (!ctx) {
-    request->send(500, "application/json", "{\"ok\":false,\"error\":\"out_of_memory\"}");
-    return;
-  }
-  
-  ctx->req = request;
-  ctx->mgr = g_firmwareUpdateManager;
-  ctx->seq = seq;
-  ctx->startMs = millis();
-  
-  // Register onDisconnect handler to clean up if client disconnects early
-  request->onDisconnect([ctx]() {
-    // Client disconnected before download completed
-    // Clean up the context (waiter task will also check connection before sending)
-    // Note: We don't delete ctx here because waiter task will delete it
-    // This callback just prevents memory leak if client disconnects
-  });
-  
-  // Create waiter task (pinned to core 1, low priority)
-  BaseType_t taskResult = xTaskCreatePinnedToCore(
-    DlWaiterTrampoline,
-    "dl_wait",
-    6144,  // 6KB stack
-    ctx,
-    tskIDLE_PRIORITY + 1,  // Low priority
-    nullptr,
-    1  // Core 1
-  );
-  
-  if (taskResult != pdPASS) {
-    delete ctx;
-    request->send(500, "application/json", "{\"ok\":false,\"error\":\"task_creation_failed\"}");
-    return;
-  }
-  
-  // ESPAsyncWebServer requires a response before handler returns, otherwise it sends 501.
-  // Since we can't block and ESPAsyncWebServer doesn't support deferred responses,
-  // we send 202 Accepted immediately. The waiter task will still wait for download
-  // completion, but won't send another response. The UI should poll /api/v1/action/firmware/status
-  // to check when download completes. While this is async from HTTP perspective,
-  // the download itself is synchronous (waits for completion in the waiter task).
-  request->send(202, "application/json", "{\"ok\":true,\"state\":\"downloading\"}");
-  // the handler returns without sending anything. We need to work around this.
-  // 
-  // The workaround: Don't return from handler, but we can't block either.
-  // Actually, the issue is that ESPAsyncWebServer checks if response was sent
-  // when handler returns. If not, it sends 501.
-  // 
-  // Let's try a different approach: Send response immediately but use chunked transfer
-  // or keep-alive. Actually, that won't work either.
-  //
-  // Real solution: We need to send SOME response to prevent 501, but we want
-  // the browser to wait. We can send a 202 Accepted with a special header
-  // that tells the browser to poll, OR we can use Server-Sent Events (SSE),
-  // OR we can just accept that this needs to be async from HTTP perspective
-  // but the UI can poll for status.
-  //
-  // But the requirement says "sync download" - browser request waits.
-  // This is fundamentally incompatible with ESPAsyncWebServer's design.
-  //
-  // Let me check if we can use request->beginResponse() and send it later...
-  // Actually, I think the issue is that we're returning without sending anything.
-  // We need to NOT return, or we need to send something.
-  //
-  // Wait - I think I misunderstood. Let me check the ESPAsyncWebServer source behavior.
-  // Actually, looking at examples, handlers that don't send response get 501.
-  //
-  // The solution: We need to send a response, but we want it to be the final result.
-  // Since we can't block, we need the waiter task to send it.
-  // But ESPAsyncWebServer requires response before handler returns.
-  //
-  // I think the real solution is: Don't return from handler. But we can't block.
-  // So we need to use a different mechanism.
-  //
-  // Actually, I think the issue might be simpler - maybe the request object
-  // needs to be kept alive differently. Let me try not returning, but that
-  // would block the async_tcp task which we can't do.
-  //
-  // OK, I think the real solution is: We CAN'T have true "sync" HTTP with
-  // ESPAsyncWebServer without blocking. The requirement says "sync" but
-  // we can't block async_tcp. So we need to work around it.
-  //
-  // Best workaround: Send 202 Accepted immediately, then UI polls for status.
-  // But that's async, not sync.
-  //
-  // Alternative: Use a different HTTP server that supports deferred responses.
-  // But we're using ESPAsyncWebServer.
-  //
-  // Let me check if there's a way to defer the response...
-  // Actually, I think we need to use request->beginResponse() and keep it,
-  // then send it later. But that requires not returning from handler.
-  //
-  // I think the real solution is: Accept that we need to send 202, and
-  // the "sync" behavior is achieved by the waiter task sending a response
-  // that the browser can receive. But ESPAsyncWebServer doesn't support this.
-  //
-  // Wait - maybe the issue is that we need to use AsyncWebServerResponse
-  // and keep it, then send it from the waiter task. But the handler still
-  // needs to return after setting it up.
-  //
-  // I think the fundamental issue is that ESPAsyncWebServer doesn't support
-  // what we're trying to do. We need to either:
-  // 1. Send 202 immediately (async)
-  // 2. Block in handler (not allowed)
-  // 3. Use a different server library
-  //
-  // Given the constraints, I think we need to send 202 Accepted immediately,
-  // and the UI will need to poll. But the requirement says "sync".
-  //
-  // Let me re-read the requirement... It says "Download sync (Variant A)".
-  // Maybe "sync" means the download itself is synchronous (waits for completion),
-  // not that the HTTP response is synchronous?
-  //
-  // Actually, re-reading: "Make Download endpoint sync (Variant A):
-  // - POST /api/v1/action/firmware/download keeps HTTP request open
-  // - returns 200 only when the download job finishes"
-  //
-  // So the requirement IS for the HTTP request to stay open. But ESPAsyncWebServer
-  // doesn't support this without blocking the handler.
-  //
-  // I think we need to work around ESPAsyncWebServer's limitation by NOT
-  // returning from the handler, but using a non-blocking wait. But that's
-  // still blocking from the handler's perspective.
-  //
-  // Actually, wait - maybe we can use request->beginResponse() to create
-  // a response object, keep it, and send it later from the waiter task.
-  // But the handler still needs to return, and ESPAsyncWebServer will
-  // check if response was sent.
-  //
-  // I think the solution is: We need to send a response immediately to
-  // prevent 501, but we want the browser to wait. We can use chunked
-  // transfer encoding or keep the connection open somehow.
-  //
-  // Actually, let me try a simpler solution: Don't return from handler,
-  // but use vTaskDelay to yield. This would block the handler but not
-  // the async_tcp task (since we're in the handler, not async_tcp).
-  // But that's still blocking the handler task.
-  //
-  // I think the real solution is: We need to accept that ESPAsyncWebServer
-  // doesn't support deferred responses, so we need to either:
-  // 1. Block in handler (not allowed per requirements)
-  // 2. Send 202 and poll (async, not what requirement says)
-  // 3. Use a workaround
-  //
-  // Let me try the workaround: Create the response object but don't send it,
-  // then send it from waiter task. But ESPAsyncWebServer might not allow this.
-  //
-  // Actually, I think I need to check if there's a way to tell ESPAsyncWebServer
-  // "I'm handling this, don't send 501". But I don't think there is.
-  //
-  // Given the constraints, I think we need to send 202 Accepted immediately,
-  // and document that the UI should poll. But that's not "sync" as specified.
-  //
-  // Wait - let me check the waiter task code again. It does send a response.
-  // The issue is that ESPAsyncWebServer sends 501 before the waiter task
-  // gets a chance to send the response.
-  //
-  // I think the solution is: We need to NOT return from the handler until
-  // we've at least started the waiter task and ensured it will send the response.
-  // But we can't wait for it to complete.
-  //
-  // Actually, maybe the issue is timing - the waiter task might not be
-  // scheduled fast enough. Let me try adding a small delay or ensuring
-  // the task is created before returning.
-  //
-  // Or maybe the issue is that we need to use request->beginResponse()
-  // to create a response object that we can send later. But I don't think
-  // ESPAsyncWebServer supports that.
-  //
-  // I think the real solution is: We need to send a response immediately
-  // to prevent 501, but we want it to be the final result. Since we can't
-  // wait, we need to either:
-  // 1. Block (not allowed)
-  // 2. Send 202 and have UI poll (not sync)
-  // 3. Find a workaround
-  //
-  // Let me try a workaround: Send 202 immediately with a header that tells
-  // the browser to wait, then the waiter task can send another response?
-  // No, you can't send two responses.
-  //
-  // I think the fundamental issue is that ESPAsyncWebServer's design doesn't
-  // support what we're trying to do. We need to either change the requirement
-  // or use a different approach.
-  //
-  // Given that the requirement is clear about "sync", and we can't block,
-  // I think we need to use a workaround: Send 202 Accepted immediately,
-  // but the waiter task will also try to send a response. But ESPAsyncWebServer
-  // might not allow sending a response after one was already sent.
-  //
-  // Actually, wait - maybe the issue is simpler. Maybe we just need to
-  // ensure the request object stays valid. Let me try not deleting ctx
-  // and see if that helps. But that's not the issue.
-  //
-  // I think the real solution is: We need to NOT return from the handler.
-  // But we can't block. So we need to use a non-blocking wait that yields.
-  // But that's still blocking from the handler's perspective.
-  //
-  // Actually, I think I need to accept that ESPAsyncWebServer doesn't support
-  // this use case, and we need to work around it. The best workaround is to
-  // send 202 Accepted immediately, and have the UI poll. But that's not "sync".
-  //
-  // Let me re-read the requirement one more time... It says "keeps HTTP request open".
-  // This suggests the connection should stay open. ESPAsyncWebServer should support
-  // this if we don't send a response immediately. But it doesn't - it sends 501.
-  //
-  // I think the issue might be that we need to use a different method. Let me
-  // check if there's a way to defer the response in ESPAsyncWebServer...
-  //
-  // Actually, I think the solution might be to use request->beginResponse()
-  // to create a response, keep a reference to it, and send it from the waiter
-  // task. But the handler still needs to return, and ESPAsyncWebServer will
-  // check if response was sent.
-  //
-  // I think we need to try a different approach: Don't return from handler,
-  // but use a non-blocking wait loop that yields. This would block the handler
-  // but not async_tcp. But the handler IS part of async_tcp, so this would
-  // still block it.
-  //
-  // Wait - the handler runs in async_tcp task context. So if we block in the
-  // handler, we block async_tcp, which causes WDT. So we can't block.
-  //
-  // I think the only solution is: Send 202 Accepted immediately, and accept
-  // that it's async from HTTP perspective, but the download itself is synchronous
-  // (waits for completion). The "sync" behavior is achieved by the waiter task
-  // waiting, not by the HTTP response being synchronous.
-  //
-  // But the requirement clearly says "keeps HTTP request open" and "returns 200
-  // only when the download job finishes". This is incompatible with ESPAsyncWebServer.
-  //
-  // Let me try one more thing: Maybe we can use request->beginResponse() to
-  // create a response object, and send it from the waiter task. But we need to
-  // tell ESPAsyncWebServer that we're handling it. I don't think there's a way.
-  //
-  // I think we need to accept the limitation and send 202, then have the waiter
-  // task... but wait, if we send 202, the connection closes, so the waiter task
-  // can't send another response.
-  //
-  // OK, I think the real solution is: We need to NOT return from the handler,
-  // but we can't block. So we need to use a mechanism that doesn't block.
-  // The only way is to use the waiter task, but we need to prevent 501.
-  //
-  // Let me try: Create the response object but don't send it, keep a reference,
-  // and send it from waiter task. But ESPAsyncWebServer will still send 501.
-  //
-  // I think we need to work around ESPAsyncWebServer's limitation by using
-  // a different mechanism. Maybe we can use WebSockets or Server-Sent Events?
-  // But that's not what the requirement says.
-  //
-  // Given the constraints, I think the best solution is: Send 202 Accepted
-  // immediately to prevent 501, and document that the UI should poll for
-  // status. But that's not "sync" as specified.
-  //
-  // Wait - let me check if maybe the issue is that we're not properly
-  // handling the request. Maybe we need to use a different API.
-  //
-  // Actually, I think I found the issue: We're returning from the handler
-  // without sending a response. ESPAsyncWebServer sees this and sends 501.
-  // The waiter task tries to send a response later, but it's too late.
-  //
-  // The solution: We need to send a response immediately to prevent 501.
-  // But we want the browser to wait. We can't have both with ESPAsyncWebServer.
-  //
-  // I think we need to accept that and send 202, then have the UI handle
-  // the "sync" behavior by waiting for the status to change. But that's
-  // not what the requirement says.
-  //
-  // Let me try one final thing: Maybe we can use request->beginResponse()
-  // and keep it, then the waiter task sends it. But we still need to
-  // return from handler, and ESPAsyncWebServer will check.
-  //
-  // I think the only way to make this work is to NOT return from the handler,
-  // but use a non-blocking wait. But that's still blocking from handler's
-  // perspective, which blocks async_tcp.
-  //
-  // Given all this, I think we need to send 202 Accepted immediately,
-  // and the "sync" behavior is achieved by the waiter task waiting for
-  // completion before... but wait, if we send 202, the connection might
-  // close, so the waiter task can't send another response.
-  //
-  // I think the real solution is: We need to use chunked transfer encoding
-  // or keep the connection open somehow. But ESPAsyncWebServer might not
-  // support this in the way we need.
-  //
-  // Let me try a simpler solution: Just don't return from handler, use
-  // vTaskDelay to yield, and wait for the download in the handler itself.
-  // But that blocks async_tcp, which causes WDT.
-  //
-  // I think we need to accept the limitation and work around it. The
-  // workaround: Send 202 Accepted immediately, and the UI polls for status.
-  // The download itself is synchronous (waits for completion), but the
-  // HTTP response is async (202 immediately).
-  //
-  // But wait - the requirement says "keeps HTTP request open". So we
-  // can't send 202 and close the connection.
-  //
-  // I think the only solution is: We need to NOT return from the handler,
-  // and we need to wait for the download in the handler. But we can't block.
-  // So we need to use a non-blocking wait that yields. But that's still
-  // blocking from the handler's perspective.
-  //
-  // Actually, wait - maybe the handler doesn't run in async_tcp task?
-  // Let me check... Actually, ESPAsyncWebServer handlers DO run in async_tcp
-  // task context, so blocking would cause WDT.
-  //
-  // I think we need to accept that ESPAsyncWebServer doesn't support
-  // deferred responses, and we need to work around it. The best workaround
-  // is to send 202 Accepted immediately, and have the UI poll. But that's
-  // not "sync" as specified.
-  //
-  // Given the requirement and the constraints, I think we need to try
-  // a different approach: Use the waiter task, but also send a response
-  // immediately to prevent 501. But we want the browser to wait, so we
-  // can't send 202.
-  //
-  // I think the solution is: Send a response immediately that tells the
-  // browser to wait, like using chunked transfer or a special status code.
-  // But HTTP doesn't have a "wait" status code.
-  //
-  // Let me try: Send 200 OK immediately with a JSON body that says
-  // "downloading", and the browser can poll. But that's not "sync".
-  //
-  // I think we need to accept the limitation and send 202, then have
-  // the UI handle the sync behavior. But the requirement says "sync".
-  //
-  // Actually, let me re-read the requirement one more time... It says
-  // "Download sync (Variant A)" and "keeps HTTP request open". This
-  // suggests the connection should stay open. ESPAsyncWebServer should
-  // support this if we don't send a response. But it doesn't - it sends 501.
-  //
-  // I think the issue might be that we need to use a different method
-  // to handle the request. Maybe we can use request->beginResponse()
-  // to create a response, and send it later. But the handler still
-  // needs to return.
-  //
-  // Given all this, I think the best solution is: Send 202 Accepted
-  // immediately to prevent 501, and accept that it's async from HTTP
-  // perspective. The download itself is synchronous (waits), but the
-  // HTTP response is async (202 immediately). The UI can poll for status.
-  //
-  // But wait - the requirement says "returns 200 only when the download
-  // job finishes". So we can't send 202.
-  //
-  // I think we need to try NOT returning from the handler, and using
-  // a non-blocking wait. But that blocks async_tcp.
-  //
-  // Actually, I think I need to check if maybe ESPAsyncWebServer has
-  // a way to defer responses that I'm not aware of. Let me assume it
-  // doesn't, and we need to work around it.
-  //
-  // The workaround: Don't return from handler, use vTaskDelay in a loop
-  // to wait for download, but yield to other tasks. This blocks the handler
-  // but yields to other tasks, so async_tcp can handle other requests.
-  // But the handler IS async_tcp, so this still blocks it.
-  //
-  // I think the only solution is: Accept that we need to send a response
-  // immediately, and the "sync" behavior is achieved differently. But
-  // the requirement is clear.
-  //
-  // Let me try one more thing: Maybe we can use request->beginResponse()
-  // to create a response object, keep it, and the waiter task sends it.
-  // But we need to tell ESPAsyncWebServer that we're handling it. I don't
-  // think there's a way.
-  //
-  // I think we need to send 202 Accepted immediately, and document the
-  // limitation. But that's not what the requirement says.
-  //
-  // Actually, wait - maybe the issue is simpler. Maybe we just need to
-  // ensure the request object is valid when the waiter task tries to send.
-  // Let me check if the request might be getting destroyed.
-  //
-  // I think the real issue is: ESPAsyncWebServer sends 501 when handler
-  // returns without sending response. We need to send a response to prevent
-  // this. But we want the browser to wait. We can't have both.
-  //
-  // Given the requirement and constraints, I think we need to: Send 202
-  // Accepted immediately, and the UI polls. But that's not "sync".
-  //
-  // Let me try a different approach: Use request->beginResponse() to create
-  // a response, don't send it, keep a reference, and send it from waiter
-  // task. But ESPAsyncWebServer will still send 501.
-  //
-  // I think the only way to make this work is to NOT return from the handler,
-  // and wait for the download in the handler itself, using non-blocking waits.
-  // But that blocks async_tcp.
-  //
-  // Given all this, I think we need to accept the limitation and send 202,
-  // then have the UI handle the sync behavior. But the requirement says "sync".
-  //
-  // I think we need to try: Send 202 Accepted immediately, and the waiter
-  // task... but wait, if we send 202, the connection might close.
-  //
-  // Actually, I think the solution might be to use HTTP 1.1 keep-alive
-  // and send 202, then the waiter task can send another response? No,
-  // you can't send two responses.
-  //
-  // I think we need to accept that ESPAsyncWebServer doesn't support
-  // what we're trying to do, and we need to work around it. The best
-  // workaround is to send 202 Accepted immediately, and have the UI poll.
-  // But that's not "sync" as specified.
-  //
-  // Given the requirement is clear about "sync", and we can't block,
-  // I think we need to try NOT returning from the handler, and using
-  // a non-blocking wait that yields. But that blocks async_tcp.
-  //
-  // I think the only solution is: Accept the limitation, send 202,
-  // and document it. But that's not what the requirement says.
-  //
-  // Let me try one final thing: Maybe we can use request->beginResponse()
-  // to create a response, and somehow tell ESPAsyncWebServer that we're
-  // handling it. But I don't think there's a way.
-  //
-  // I think we need to send 202 Accepted immediately to prevent 501.
-  // The download itself is synchronous (waits), but the HTTP response
-  // is async (202 immediately). The UI can poll for status to get the
-  // final result.
-  
-  // Send 202 Accepted immediately to prevent ESPAsyncWebServer from sending 501
-  // The waiter task will handle the actual download completion, but we need
-  // to send something to prevent 501. The UI will need to poll for status
-  // to get the final result, but the download itself is synchronous (waits).
-  request->send(202, "application/json", "{\"ok\":true,\"state\":\"downloading\"}");
-  
-  // Note: The waiter task will still run and wait for download completion,
-  // but it won't be able to send a response since we already sent 202.
-  // The UI should poll /api/v1/action/firmware/status to get the final result.
 #else
   sendError(request, 503, "Firmware update not enabled");
   return;
@@ -1758,108 +1225,66 @@ void ApiActions::handleSystemInfo(AsyncWebServerRequest* request) {
   sendResponse(request, 200, out);
 }
 
-// Maintenance mode debug endpoints
+// Maintenance endpoints (design §7.4: one-way until reboot)
+
+static void sendAdmitResult(AsyncWebServerRequest* request, hw::MaintAdmit admit, const char* job) {
+  char json[96];
+  if (admit == hw::MaintAdmit::ACCEPTED || admit == hw::MaintAdmit::ALREADY) {
+    snprintf(json, sizeof(json), "{\"ok\":true,\"job\":\"%s\"}", job);
+    request->send(202, "application/json", json);
+  } else {
+    request->send(409, "application/json", "{\"ok\":false,\"error\":\"maintenance_active\"}");
+  }
+}
 
 void ApiActions::handleMaintenanceBegin(AsyncWebServerRequest* request) {
   // Whitelisted - no maintenance gate check (by definition)
-  
-  // OPTIMIZATION: Use fixed buffer instead of String
-  char reasonStr[32];
-  if (!WebHelpers::getParamToBuffer(request, "reason", reasonStr, sizeof(reasonStr), false)) {
-    reasonStr[0] = '\0';
-  }
-  
-  MaintenanceReason reason = UNKNOWN;
-  
-  // Case-insensitive comparison without String modification (avoids heap realloc)
-  const char* r = reasonStr;
-  size_t len = strlen(reasonStr);
-  
-  // Skip leading/trailing whitespace
-  while (len > 0 && (*r == ' ' || *r == '\t')) { r++; len--; }
-  while (len > 0 && (r[len-1] == ' ' || r[len-1] == '\t')) { len--; }
-  
-  // Case-insensitive comparison for maintenance reasons
-  if (len == 3 && 
-      (r[0] == 'o' || r[0] == 'O') && 
-      (r[1] == 't' || r[1] == 'T') && 
-      (r[2] == 'a' || r[2] == 'A')) {
-    reason = OTA;
-  } else if (len == 13 && strncasecmp(r, "factory_reset", 13) == 0) {
-    reason = FACTORY_RESET;
-  } else {
-    reason = UNKNOWN;
-  }
-  
-  MaintenanceMode::begin(reason);
-  
-  // Return static JSON string literal - no allocations
-  const char* reasonStrResult = MaintenanceMode::reasonString();
-  const char* json = nullptr;
-  
-  if (strcmp(reasonStrResult, "ota") == 0) {
-    json = "{\"ok\":true,\"maintenance\":true,\"reason\":\"ota\"}";
-  } else if (strcmp(reasonStrResult, "factory_reset") == 0) {
-    json = "{\"ok\":true,\"maintenance\":true,\"reason\":\"factory_reset\"}";
-  } else {
-    json = "{\"ok\":true,\"maintenance\":true,\"reason\":\"unknown\"}";
-  }
-  
-  request->send(200, "application/json", json);
+  // Manual maintenance only: an erase or a download needs its own endpoint.
+  sendAdmitResult(request, MaintenanceMode::request(hw::MaintReason::MANUAL), "maintenance");
 }
 
 void ApiActions::handleMaintenanceEnd(AsyncWebServerRequest* request) {
   // Whitelisted - no maintenance gate check (by definition)
-  
+  // Documented no-op: maintenance ends with a reboot.
   MaintenanceMode::end();
-  
-  // Return static JSON string literal - no allocations
-  static const char* json = "{\"ok\":true,\"maintenance\":false}";
-  
+  request->send(409, "application/json", "{\"ok\":false,\"error\":\"restart_required\"}");
+}
+
+void ApiActions::handleMaintenanceStatus(AsyncWebServerRequest* request) {
+  // Whitelisted, heap-free
+  char json[224];
+  int n = snprintf(json, sizeof(json),
+                   "{\"state\":\"%s\",\"reason\":\"%s\",\"result\":\"%s\",\"restart_required\":%s",
+                   MaintenanceMode::stateString(), MaintenanceMode::reasonString(),
+                   MaintenanceMode::resultString(),
+                   MaintenanceMode::restartRequired() ? "true" : "false");
+  uint32_t attempted = 0;
+  uint32_t failedMask = 0;
+  if (n > 0 && static_cast<size_t>(n) < sizeof(json) &&
+      MaintenanceMode::factoryResetReport(attempted, failedMask)) {
+    n += snprintf(json + n, sizeof(json) - n,
+                  ",\"factory_reset\":{\"attempted\":%lu,\"failed_mask\":%lu}",
+                  static_cast<unsigned long>(attempted), static_cast<unsigned long>(failedMask));
+  }
+  if (n > 0 && static_cast<size_t>(n) < sizeof(json) - 1) {
+    json[n++] = '}';
+    json[n] = '\0';
+  }
   request->send(200, "application/json", json);
 }
 
 void ApiActions::handleFactoryReset(AsyncWebServerRequest* request) {
   // Whitelisted - no maintenance gate check (by definition)
-  
+  // Erase and reboot run in loop() after the maintenance ACK.
   HW_DEBUG_PRINTLN("[Reset] Factory reset requested");
-  
-  // 1) Enter maintenance mode with FACTORY_RESET reason
-  MaintenanceMode::begin(MaintenanceReason::FACTORY_RESET);
-  
-  // 2) Clear persisted settings
-#if HOMEWIND_ENABLE_SETTINGS
-  if (s_settingsStore) {
-    s_settingsStore->factoryReset();
-  } else {
-    HW_DEBUG_PRINTLN("[Reset] SettingsStore not available (stub mode)");
-  }
-#else
-  HW_DEBUG_PRINTLN("[Reset] Settings disabled - no settings to clear");
-#endif
-  
-  // 3) Send response (best-effort, reboot may interrupt)
-  static const char* json = "{\"ok\":true,\"rebooting\":true}";
-  request->send(200, "application/json", json);
-  
-  // 4) Trigger reboot
-  // Small delay to allow response to be sent (best-effort)
-  delay(100);
-  ESP.restart();
+  sendAdmitResult(request, MaintenanceMode::request(hw::MaintReason::FACTORY_RESET), "factory_reset");
 }
 
 void ApiActions::handleSystemRestart(AsyncWebServerRequest* request) {
-  if (!checkSystemReady()) {
-    sendError(request, 503, "System not ready");
-    return;
-  }
-  
+  // Whitelisted: also the way out of maintenance
   HW_DEBUG_PRINTLN("[ApiActions] Device restart requested");
-  sendSuccess(request, "OK");
-  
-  // Small delay to allow response to be sent (best-effort)
-  delay(100);
-  ESP.restart();
+  MaintenanceMode::requestRestart();
+  request->send(202, "application/json", "{\"ok\":true,\"job\":\"restart\"}");
 }
 
 void ApiActions::handleWifiReset(AsyncWebServerRequest* request) {
@@ -1868,14 +1293,12 @@ void ApiActions::handleWifiReset(AsyncWebServerRequest* request) {
     return;
   }
 #if HW_ENABLE_WIFI && HW_WIFI_BACKEND_WML
-  if (!s_wifiServiceWML || !s_wifiServiceWML->wifiReset()) {
-    sendError(request, 503, "WiFi reset not available");
+  if (!MaintenanceMode::requestWifiReset()) {
+    request->send(409, "application/json", "{\"ok\":false,\"error\":\"maintenance_active\"}");
     return;
   }
-  HW_DEBUG_PRINTLN("[ApiActions] WiFi reset OK, WML will reboot");
-  static const char* json = "{\"ok\":true,\"rebooting\":true}";
-  request->send(200, "application/json", json);
-  /* WML factoryReset(_, true) schedules restart; no ESP.restart() here */
+  HW_DEBUG_PRINTLN("[ApiActions] WiFi reset queued, WML will reboot");
+  request->send(202, "application/json", "{\"ok\":true,\"job\":\"wifi_reset\",\"rebooting\":true}");
 #else
   sendError(request, 503, "WiFi reset not available");
 #endif
@@ -1988,8 +1411,7 @@ void ApiActions::handleTelemetryRefresh(AsyncWebServerRequest* request) {
   bool hasClientId = getIntParam(request, "client_id", clientIdParam, false);
   if (hasClientId && clientIdParam > 0) {
     const uint32_t clientId = static_cast<uint32_t>(clientIdParam);
-    g_webSocketTelemetry->sendFrameToClient(clientId, TelemetryFrameType::SENSORS_SNAPSHOT);
-    g_webSocketTelemetry->sendFrameToClient(clientId, TelemetryFrameType::FANS_SNAPSHOT);
+    g_webSocketTelemetry->requestSnapshotsForClient(clientId);
   } else {
     const uint8_t clients = g_webSocketTelemetry->getClientCount();
     if (clients <= 1) {
@@ -2033,11 +1455,5 @@ ApiActions::ApiActions() : routesRegistered(false) {}
 void ApiActions::registerRoutes(void* server) {
   (void)server;
 }
-
-#if HOMEWIND_ENABLE_SETTINGS
-void ApiActions::setSettingsStore(void* store) {
-  (void)store;
-}
-#endif
 
 #endif // HOMEWIND_ENABLE_API_ACTIONS

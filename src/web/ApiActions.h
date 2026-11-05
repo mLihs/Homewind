@@ -17,11 +17,6 @@ class ApiActions {
 public:
   ApiActions();
   void registerRoutes(void* server = nullptr);
-  
-#if HOMEWIND_ENABLE_SETTINGS
-  static void setSettingsStore(void* store);
-#endif
-  static void setWiFiServiceWML(void* wml);
 
 private:
   bool routesRegistered;
@@ -53,6 +48,7 @@ private:
   static void handleUILockStatus(AsyncWebServerRequest* request);
   static void handleMaintenanceBegin(AsyncWebServerRequest* request);
   static void handleMaintenanceEnd(AsyncWebServerRequest* request);
+  static void handleMaintenanceStatus(AsyncWebServerRequest* request);
   static void handleFactoryReset(AsyncWebServerRequest* request);
   static void handleSystemRestart(AsyncWebServerRequest* request);
   static void handleWifiReset(AsyncWebServerRequest* request);

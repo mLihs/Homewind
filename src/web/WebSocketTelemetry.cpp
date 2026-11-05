@@ -11,8 +11,9 @@
  *   Total: 12 bytes
  * 
  * SENSORS_SNAPSHOT (0x02) - Snapshot:
- *   [count:uint8][sensor1...sensorN]
- *   Sensor entry: [name_len:uint8][name:bytes][type:uint8][mac_len:uint8][mac:bytes][connected:uint8][battery:uint8]
+ *   [count:uint8][sensor1...sensorN][status1...statusN]
+ *   Sensor entry (84 B): [name:64][type:uint8][mac:17][connected:uint8][battery:uint8]
+ *   Status (1.6.0): 0=ok, 1=duplicate
  * 
  * FANS_SNAPSHOT (0x07) - Snapshot:
  *   [count:uint8][fan1...fanN]
@@ -25,11 +26,11 @@
  *   [value:uint16]
  * 
  * DISCOVERY_STATUS (0x04) - Delta:
- *   [active:uint8][type:uint8]
+ *   [active:uint8][type:uint8][error:uint8]   (error appended in 1.6.0: 0=none, 1=busy)
  * 
  * DISCOVERY_RESULTS (0x05) - Delta:
- *   [count:uint8][result1...resultN]
- *   Result entry: [name_len:uint8][name:bytes][type:uint8][mac_len:uint8][mac:bytes]
+ *   [count:uint8][generation:uint32][result1...resultN]   (generation since 1.6.0)
+ *   Result entry: [index:uint8][name_len:uint8][name:bytes]
  * 
  * FIRMWARE_VERSION (0x08) - Delta:
  *   [version_len:uint8][version:bytes][board_len:uint8][board:bytes]
@@ -51,7 +52,6 @@
 
 #if HW_ENABLE_BLE
 #include "../core/BLERelayManager.h"
-#include <BluetoothBikeSensorServer.h>
 // Forward declaration - will be set by App
 extern BLERelayManager* g_bleRelayManager;
 #endif
@@ -96,6 +96,8 @@ WebSocketTelemetry::WebSocketTelemetry()
   , stagedConnectPhase(0)
   , stagedConnectStartMs(0)
   , stagedConnectTargetClientId(0)
+  , snapshotRequestMux(portMUX_INITIALIZER_UNLOCKED)
+  , snapshotRequests{}
 #if HW_ENABLE_TELEMETRY_DIAG && HW_ENABLE_DEBUG_LOGS
   , diagLastSummaryMs(0)
   , diagBuiltMask60s(0)
@@ -185,11 +187,11 @@ void WebSocketTelemetry::loopFlush() {
     if (now - stagedConnectStartMs >= STAGED_DELAY_MS * stagedConnectPhase) {
       switch (stagedConnectPhase) {
         case 1:
-          buildAndSendFrameToClient(stagedConnectTargetClientId, TelemetryFrameType::SENSORS_SNAPSHOT);
+          emitFrameToClient(stagedConnectTargetClientId, TelemetryFrameType::SENSORS_SNAPSHOT);
           HW_DEBUG_PRINTLN("[WebSocketTelemetry] Staged connect: SENSORS_SNAPSHOT");
           break;
         case 2:
-          buildAndSendFrameToClient(stagedConnectTargetClientId, TelemetryFrameType::FANS_SNAPSHOT);
+          emitFrameToClient(stagedConnectTargetClientId, TelemetryFrameType::FANS_SNAPSHOT);
           HW_DEBUG_PRINTLN("[WebSocketTelemetry] Staged connect: FANS_SNAPSHOT");
           break;
         case 3:
@@ -201,6 +203,19 @@ void WebSocketTelemetry::loopFlush() {
     }
   }
   
+  // Per-client snapshot requests (posted by HTTP handlers on the AsyncTCP task)
+  uint32_t requested[SNAPSHOT_REQUEST_SLOTS];
+  portENTER_CRITICAL(&snapshotRequestMux);
+  memcpy(requested, snapshotRequests, sizeof(requested));
+  memset(snapshotRequests, 0, sizeof(snapshotRequests));
+  portEXIT_CRITICAL(&snapshotRequestMux);
+  for (uint8_t i = 0; i < SNAPSHOT_REQUEST_SLOTS; i++) {
+    if (requested[i] != 0) {
+      emitFrameToClient(requested[i], TelemetryFrameType::SENSORS_SNAPSHOT);
+      emitFrameToClient(requested[i], TelemetryFrameType::FANS_SNAPSHOT);
+    }
+  }
+
   // Check if periodic SYSTEM_STATUS snapshot is due (only when clients connected)
   if (now - lastSnapshotTime >= SNAPSHOT_INTERVAL_MS) {
     markDirty(TelemetryFrameType::SYSTEM_STATUS);
@@ -289,7 +304,7 @@ void WebSocketTelemetry::loopFlush() {
     for (uint8_t i = 0; i < 16; i++) {
       if (dirtyFlags & (1 << i)) {
         TelemetryFrameType frameType = static_cast<TelemetryFrameType>(i + 1);
-        buildAndSendFrame(frameType);
+        emitFrame(frameType);
 #if HW_ENABLE_TELEMETRY_DIAG && HW_ENABLE_DEBUG_LOGS
         // Track which frames were actually built/sent
         diagBuiltMaskLastFlush |= (1U << i);
@@ -327,30 +342,27 @@ uint8_t WebSocketTelemetry::getClientCount() const {
   return wsSocket->count();
 }
 
-void WebSocketTelemetry::flushFrame(TelemetryFrameType frameType) {
-  if (!wsSocket || !initialized) {
+void WebSocketTelemetry::requestSnapshotsForClient(uint32_t clientId) {
+  if (clientId == 0) {
     return;
   }
-  
-  // OPTIMIZATION: Don't build frames if no clients connected
-  if (wsSocket->count() == 0) {
-    return;
+  portENTER_CRITICAL(&snapshotRequestMux);
+  int8_t freeSlot = -1;
+  bool present = false;
+  for (uint8_t i = 0; i < SNAPSHOT_REQUEST_SLOTS; i++) {
+    if (snapshotRequests[i] == clientId) {
+      present = true;
+      break;
+    }
+    if (snapshotRequests[i] == 0 && freeSlot < 0) {
+      freeSlot = static_cast<int8_t>(i);
+    }
   }
-  
-  // Build and send frame immediately
-  buildAndSendFrame(frameType);
-  
-  // Clear the dirty flag for this frame type
-  uint8_t frameId = static_cast<uint8_t>(frameType);
-  if (frameId >= 1 && frameId <= 11) {
-    dirtyFlags &= ~(1 << (frameId - 1));
+  if (!present && freeSlot >= 0) {
+    snapshotRequests[freeSlot] = clientId;
   }
-}
-
-void WebSocketTelemetry::sendFrameToClient(uint32_t clientId, TelemetryFrameType frameType) {
-  // Public wrapper for safe unicast sending.
-  // NOTE: This builds the frame immediately; call from main loop / HTTP handler only.
-  buildAndSendFrameToClient(clientId, frameType);
+  portEXIT_CRITICAL(&snapshotRequestMux);
+  // Full: dropped; the periodic heavy refresh still reaches the client
 }
 
 void WebSocketTelemetry::onWebSocketEvent(AsyncWebSocket* server, AsyncWebSocketClient* client, 
@@ -466,7 +478,7 @@ void WebSocketTelemetry::sendFrame(TelemetryFrameType frameType, const uint8_t* 
   wsSocket->binaryAll(frameBuffer, payloadLen + 1);
 }
 
-void WebSocketTelemetry::buildAndSendFrameToClient(uint32_t clientId, TelemetryFrameType frameType) {
+void WebSocketTelemetry::emitFrameToClient(uint32_t clientId, TelemetryFrameType frameType) {
   if (!wsSocket || !initialized) {
     return;
   }
@@ -529,7 +541,7 @@ void WebSocketTelemetry::buildAndSendFrameToClient(uint32_t clientId, TelemetryF
   wsSocket->binary(clientId, frameBuffer, payloadLen + 1);
 }
 
-void WebSocketTelemetry::buildAndSendFrame(TelemetryFrameType frameType) {
+void WebSocketTelemetry::emitFrame(TelemetryFrameType frameType) {
   // OPTIMIZATION: Check client count BEFORE building frames
   // This prevents unnecessary buffer builds and CPU usage when no clients are connected
   if (!wsSocket || wsSocket->count() == 0) {
@@ -601,7 +613,7 @@ size_t WebSocketTelemetry::buildSystemStatus(uint8_t* buffer, size_t bufferSize)
 }
 
 size_t WebSocketTelemetry::buildSensorsSnapshot(uint8_t* buffer, size_t bufferSize) {
-  // Format: [count:uint8][sensor1:84][sensor2:84][sensor3:84]
+  // Format: [count:uint8][sensor1:84]...[sensorN:84][status1:uint8]...[statusN:uint8]
   // Sensor entry (84 bytes): [name:64][type:1][mac:17][connected:1][battery:1]
   // Fixed-size entries, but we only emit `count` entries (smaller payload).
   //
@@ -622,15 +634,16 @@ size_t WebSocketTelemetry::buildSensorsSnapshot(uint8_t* buffer, size_t bufferSi
   }
   
   // Get sensors from BLERelayManager
-  SensorInfo sensors[2];  // Max 2 sensors (HR, CSC)
+  HwSensorInfo sensors[2];  // Max 2 sensors (HR, CSC)
   uint8_t count = g_bleRelayManager->getConfiguredSensors(sensors, 2);
   
   size_t offset = 0;
   offset = writeUint8(buffer, offset, count);
+  uint8_t written = 0;
   
   // Write each sensor (fixed 84 bytes per sensor)
   for (uint8_t i = 0; i < count && i < 2; i++) {
-    const SensorInfo& s = sensors[i];
+    const HwSensorInfo& s = sensors[i];
     
     // Check buffer space
     if (offset + SENSOR_ENTRY_SIZE > bufferSize) {
@@ -669,6 +682,16 @@ size_t WebSocketTelemetry::buildSensorsSnapshot(uint8_t* buffer, size_t bufferSi
     // Write battery (1 byte: 0-100, or 255 for unknown)
     uint8_t batteryByte = (s.battery >= 0 && s.battery <= 100) ? static_cast<uint8_t>(s.battery) : 255;
     buffer[offset++] = batteryByte;
+    written++;
+  }
+  writeUint8(buffer, 0, written);
+  
+  // Status block (appended in 1.6.0, after all records so older decoders stay
+  // valid): one byte per record, 0=ok, 1=duplicate (MAC held by the other type)
+  if (offset + written <= bufferSize) {
+    for (uint8_t i = 0; i < written; i++) {
+      buffer[offset++] = sensors[i].duplicate ? 1 : 0;
+    }
   }
   
   return offset;
@@ -786,7 +809,7 @@ size_t WebSocketTelemetry::buildSensorConnState(uint8_t* buffer, size_t bufferSi
   }
   
   // Get first sensor (or we could track the last changed sensor)
-  SensorInfo sensors[2];  // MAX_SENSORS (HR, CSC)
+  HwSensorInfo sensors[2];  // MAX_SENSORS (HR, CSC)
   uint8_t count = g_bleRelayManager->getConfiguredSensors(sensors, 2);
   
   if (count == 0) {
@@ -794,7 +817,7 @@ size_t WebSocketTelemetry::buildSensorConnState(uint8_t* buffer, size_t bufferSi
   }
   
   // Send first sensor's state (in a real implementation, we'd track which sensor changed)
-  const SensorInfo& s = sensors[0];
+  const HwSensorInfo& s = sensors[0];
   
   size_t nameLen = strlen(s.name);
   if (nameLen > 255) nameLen = 255;
@@ -826,9 +849,9 @@ size_t WebSocketTelemetry::buildHeartRate(uint8_t* buffer, size_t bufferSize) {
   }
   
 #if HW_ENABLE_BLE
-  // Get heart rate from BluetoothBikeSensorServer
-  if (BluetoothBikeSensorServerHasHeartRate()) {
-    uint16_t heartRate = BluetoothBikeSensorServerGetLastHeartRate();
+  // Latest value latched by BLERelayManager::loop() (same task)
+  uint16_t heartRate = 0;
+  if (g_bleRelayManager && g_bleRelayManager->lastHeartRate(heartRate)) {
     return writeUint16(buffer, 0, heartRate);
   }
 #endif
@@ -838,10 +861,11 @@ size_t WebSocketTelemetry::buildHeartRate(uint8_t* buffer, size_t bufferSize) {
 }
 
 size_t WebSocketTelemetry::buildDiscoveryStatus(uint8_t* buffer, size_t bufferSize) {
-  // Format: [active:uint8][type:uint8]
+  // Format: [active:uint8][type:uint8][error:uint8]
   // type: 0=HR, 1=CSC, 255=all/unknown (2=PWR reserved, not used in Homewind)
+  // error (appended in 1.6.0): 0=none, 1=busy (start refused while a discovery was open)
   
-  if (bufferSize < 2) {
+  if (bufferSize < 3) {
     return 0;
   }
   
@@ -858,6 +882,7 @@ size_t WebSocketTelemetry::buildDiscoveryStatus(uint8_t* buffer, size_t bufferSi
   size_t offset = 0;
   offset = writeUint8(buffer, offset, active);
   offset = writeUint8(buffer, offset, type);
+  offset = writeUint8(buffer, offset, g_bleRelayManager->discoveryError());
   
   return offset;
 #else
@@ -866,11 +891,13 @@ size_t WebSocketTelemetry::buildDiscoveryStatus(uint8_t* buffer, size_t bufferSi
 }
 
 size_t WebSocketTelemetry::buildDiscoveryResults(uint8_t* buffer, size_t bufferSize) {
-  // Format: [count:uint8][result1...resultN]
+  // Format: [count:uint8][generation:uint32 LE][result1...resultN]
   // Result: [index:uint8][name_len:uint8][name:bytes]
-  // Optimized: Only send index + name to UI, backend resolves full data from cache
+  // Only index + name go to the UI; setSensor posts {generation, index} back and
+  // the loop resolves type/MAC/addrType from the same discovery snapshot.
+  // count = entries actually written (the frame may truncate).
   
-  if (bufferSize < 1) {
+  if (bufferSize < 5) {
     return 0;
   }
   
@@ -879,49 +906,46 @@ size_t WebSocketTelemetry::buildDiscoveryResults(uint8_t* buffer, size_t bufferS
     return 0;
   }
   
-  // Get discovery count directly from library (no need to fetch all data)
-  uint8_t count = BikeSensorServerGetSensorCount();
-  if (count > 50) count = 50;  // Limit to max 50 results
+  uint32_t generation = 0;
+  const uint8_t total = g_bleRelayManager->discoverySnapshot(generation);
   
-  size_t offset = 0;
-  offset = writeUint8(buffer, offset, count);
+  size_t offset = 1;
+  offset = writeUint32(buffer, offset, generation);
+  uint8_t written = 0;
   
-  // Write each result: index + name only
-  for (uint8_t i = 0; i < count; i++) {
-    SensorType type;
-    char name[64];
-    uint8_t mac[6];  // Not used, but required by API
-    
-    if (!BikeSensorServerGetSensor(i, &type, name, sizeof(name), mac)) {
-      // Skip invalid entries
-      continue;
-    }
-    
-    size_t nameLen = strlen(name);
-    
-    // Check if we have enough space (index + name + overhead)
-    size_t estimatedSize = 1 + 1 + nameLen;  // index(1) + nameLen(1) + name
-    if (offset + estimatedSize > bufferSize) {
-      // Truncate - we've run out of space
+  for (uint8_t i = 0; i < total; i++) {
+    HwDiscoveredSensor d;
+    if (!g_bleRelayManager->discoveredSensor(i, d)) {
       break;
     }
     
-    // Write index (discovery cache index)
-    offset = writeUint8(buffer, offset, i);
-    
-    // Write name (length-prefixed)
-    if (nameLen > 255) nameLen = 255;
-    offset = writeUint8(buffer, offset, static_cast<uint8_t>(nameLen));
-    if (nameLen > 0) {
-      memcpy(buffer + offset, name, nameLen);
-      offset += nameLen;
+    // Unnamed sensor: show the MAC, the same text setSensor stores as its name
+    char macName[18];
+    const char* name = d.name;
+    if (name[0] == '\0') {
+      snprintf(macName, sizeof(macName), "%02x:%02x:%02x:%02x:%02x:%02x",
+               d.mac[0], d.mac[1], d.mac[2], d.mac[3], d.mac[4], d.mac[5]);
+      name = macName;
     }
+    const size_t nameLen = strnlen(name, sizeof(d.name));
+    
+    if (offset + 2 + nameLen > bufferSize) {
+      break;  // Truncate - out of frame space
+    }
+    
+    offset = writeUint8(buffer, offset, i);
+    offset = writeUint8(buffer, offset, static_cast<uint8_t>(nameLen));
+    memcpy(buffer + offset, name, nameLen);
+    offset += nameLen;
+    written++;
   }
   
+  writeUint8(buffer, 0, written);
   return offset;
 #else
   // BLE not enabled - return empty results
-  return writeUint8(buffer, 0, 0);
+  size_t offset = writeUint8(buffer, 0, 0);
+  return writeUint32(buffer, offset, 0);
 #endif
 }
 
@@ -1099,9 +1123,9 @@ size_t WebSocketTelemetry::buildHeartRateSettings(uint8_t* buffer, size_t buffer
 
 void WebSocketTelemetry::sendFullSnapshot() {
   // Send all snapshot frames on client connect (reconnect safety)
-  buildAndSendFrame(TelemetryFrameType::SYSTEM_STATUS);
-  buildAndSendFrame(TelemetryFrameType::SENSORS_SNAPSHOT);
-  buildAndSendFrame(TelemetryFrameType::FANS_SNAPSHOT);
+  emitFrame(TelemetryFrameType::SYSTEM_STATUS);
+  emitFrame(TelemetryFrameType::SENSORS_SNAPSHOT);
+  emitFrame(TelemetryFrameType::FANS_SNAPSHOT);
 }
 
 // Helper functions
