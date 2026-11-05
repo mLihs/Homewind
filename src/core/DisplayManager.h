@@ -39,6 +39,11 @@ public:
   void showAPScreen();    /* Switch to AP/Wifisetup screen (Captive Portal) */
   void showMainScreen();  /* Switch to main screen */
 
+  /** Detected board revision ("V1", "V1.1"), nullptr before begin() */
+  const char* boardRevision() const;
+  /** LCD_TE pulses seen during board detection (diagnostics) */
+  uint32_t tePulseCount() const;
+
 private:
   bool _initialized;
   uint16_t _lastHR;

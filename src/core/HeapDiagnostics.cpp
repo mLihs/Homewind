@@ -197,36 +197,29 @@ bool hwHeapDiagRuntimeTick(const OperationalStatus* status) {
 #if HW_ENABLE_FANS
     // Line 3+: Detailed fan status (if fans are configured)
     if (status->fansConfigured > 0) {
-      size_t discoveredCount = 0;
-      const SmartMiFanDiscoveredDevice* discovered = SmartMiFanAsync_getDiscoveredFans(discoveredCount);
-      
-      if (discoveredCount > 0) {
-        for (size_t i = 0; i < discoveredCount && i < 4; i++) {
-          FanParticipationState state = SmartMiFanAsync_getFanParticipationState(static_cast<uint8_t>(i));
-          const char* stateStr = (state == FanParticipationState::ACTIVE) ? "ACTIVE" :
-                                (state == FanParticipationState::INACTIVE) ? "INACTIVE" : "ERROR";
-          
-          const char* errorStr = "OK";
-          if (discovered[i].lastError != MiioErr::OK) {
-            switch (discovered[i].lastError) {
-              case MiioErr::TIMEOUT: errorStr = "TIMEOUT"; break;
-              case MiioErr::WRONG_SOURCE_IP: errorStr = "WRONG_IP"; break;
-              case MiioErr::DECRYPT_FAIL: errorStr = "DECRYPT_FAIL"; break;
-              case MiioErr::INVALID_RESPONSE: errorStr = "INVALID_RESP"; break;
-              default: errorStr = "UNKNOWN"; break;
-            }
+      uint8_t printed = 0;
+      for (uint8_t i = 0; i < SMARTMIFAN_MAX_FANS; i++) {
+        SmartMiFanInfo info;
+        if (!SmartMiFan::info(i, info)) continue;
+        printed++;
+        const FanParticipationState state = SmartMiFan::participation(i);
+        const char* stateStr = (state == FanParticipationState::ACTIVE) ? "ACTIVE" :
+                              (state == FanParticipationState::INACTIVE) ? "INACTIVE" : "ERROR";
+        const char* errorStr = "OK";
+        if (info.lastError != MiioErr::OK) {
+          switch (info.lastError) {
+            case MiioErr::TIMEOUT: errorStr = "TIMEOUT"; break;
+            case MiioErr::WRONG_SOURCE_IP: errorStr = "WRONG_IP"; break;
+            case MiioErr::DECRYPT_FAIL: errorStr = "DECRYPT_FAIL"; break;
+            case MiioErr::INVALID_RESPONSE: errorStr = "INVALID_RESP"; break;
+            default: errorStr = "UNKNOWN"; break;
           }
-          
-          // Print first 8 chars of token for identification
-          char tokenPrefix[9] = {0};
-          strncpy(tokenPrefix, discovered[i].token, 8);
-          
-          HW_DEBUG_PRINTF("[Heap] Fan[%zu]: ready=%s, state=%s, error=%s, token=%.8s\n",
-                         i, discovered[i].ready ? "true" : "false", stateStr, errorStr, tokenPrefix);
         }
-      } else {
-        // No discovered fans, but configured fans exist
-        HW_DEBUG_PRINTF("[Heap] Fan[?]: No discovered fans (configured=%u, discovered=0)\n",
+        HW_DEBUG_PRINTF("[Heap] Fan[%u]: ready=%s, state=%s, error=%s, token=%.8s\n",
+                       i, info.ready ? "true" : "false", stateStr, errorStr, info.token);
+      }
+      if (printed == 0) {
+        HW_DEBUG_PRINTF("[Heap] Fan[?]: No library slots (configured=%u)\n",
                        status->fansConfigured);
       }
     }

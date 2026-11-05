@@ -1,0 +1,2 @@
+# arduino-cli object cache (tools/build.sh). Flash bins stay in build/<fqbn>/.
+build/.cache/

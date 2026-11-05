@@ -110,10 +110,10 @@
     if (typeof window.onHeartRateChanged === "function") window.onHeartRateChanged(bpm);
   }
 
-  function applyFirmwareVersion(v) {
+  function applyFirmwareVersion(v, board) {
     state.firmwareVersion = v;
     const el = $("firmware-version");
-    if (el) el.textContent = "Firmware: " + v;
+    if (el) el.textContent = "Firmware: " + v + (board ? " · Board " + board : "");
   }
 
   function applyFirmwareProgress(pct) {
@@ -310,7 +310,8 @@
       case FRAME.FIRMWARE_VERSION: {
         const r = readLPString(u8, off);
         if (!r.ok) return;
-        applyFirmwareVersion(r.str);
+        const b = readLPString(u8, r.next);
+        applyFirmwareVersion(r.str, b.ok ? b.str : "");
         return;
       }
 

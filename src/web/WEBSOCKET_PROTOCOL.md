@@ -158,11 +158,12 @@ Sent only when state changes (marked dirty).
 
 **Payload:**
 ```
-[version_len:uint8][version:bytes]
+[version_len:uint8][version:bytes][board_len:uint8][board:bytes]
 ```
 
 - `version_len`: Version string length
 - `version`: Version string (UTF-8, e.g., "1.2.3")
+- `board_len`, `board`: Optional. Detected board revision ("V1", "V1.1"), only sent on display builds. Clients that read only the version ignore it.
 
 #### FIRMWARE_PROGRESS (0x09) - Firmware Update Progress
 

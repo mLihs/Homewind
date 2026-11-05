@@ -32,7 +32,8 @@
  *   Result entry: [name_len:uint8][name:bytes][type:uint8][mac_len:uint8][mac:bytes]
  * 
  * FIRMWARE_VERSION (0x08) - Delta:
- *   [version_len:uint8][version:bytes]
+ *   [version_len:uint8][version:bytes][board_len:uint8][board:bytes]
+ *   board_len/board optional (board revision, e.g. "V1.1")
  * 
  * FIRMWARE_PROGRESS (0x09) - Delta:
  *   [percent:uint8]
@@ -56,13 +57,8 @@ extern BLERelayManager* g_bleRelayManager;
 #endif
 
 #if HW_ENABLE_FANS
-// SystemState.h is already included above, so namespace SystemState is defined
-// Workaround for SystemState name conflict: rename SmartMiFanAsync's enum
-#define SystemState SmartMiFanAsync_SystemState
 #include "../core/FanController.h"
 #include <SmartMiFanAsync.h>
-#undef SystemState
-// Forward declaration - will be set by App
 extern FanController* g_fanController;
 #endif
 
@@ -72,6 +68,10 @@ extern FanController* g_fanController;
 
 #if HW_ENABLE_NVS
 #include "../core/HeartRateSettings.h"
+#endif
+
+#if HW_ENABLE_DISPLAY
+#include "../core/DisplayManager.h"
 #endif
 
 #include <strings.h>  // strcasecmp
@@ -697,26 +697,22 @@ size_t WebSocketTelemetry::buildFansSnapshot(uint8_t* buffer, size_t bufferSize)
     return writeUint8(buffer, 0, 0);
   }
   
-  // Get discovered fans from SmartMiFanAsync
-  SmartMiFanDiscoveredDevice discoveredFans[4];
-  size_t discoveredCount = 0;
-  if (!g_fanController->getDiscoveredFans(static_cast<void*>(discoveredFans), discoveredCount)) {
-    return writeUint8(buffer, 0, 0);
+  FanConfig configuredFans[FanController::MAX_FANS];
+  uint8_t configuredCount = 0;
+  uint8_t places[FanController::MAX_FANS];
+  for (uint8_t i = 0; i < FanController::MAX_FANS; i++) {
+    if (g_fanController->getFanConfig(i, configuredFans[configuredCount])) {
+      places[configuredCount] = i;
+      configuredCount++;
+    }
   }
-  
-  // Get configured fans from FanController
-  FanConfig configuredFans[4];
-  uint8_t configuredCount = g_fanController->getFanCount();
-  for (uint8_t i = 0; i < configuredCount && i < 4; i++) {
-    g_fanController->getFanConfig(i, configuredFans[i]);
-  }
-  
+
   size_t offset = 0;
   offset = writeUint8(buffer, offset, configuredCount);
-  
-  // Write each fan (fixed 35 bytes per fan)
-  for (uint8_t i = 0; i < configuredCount && i < 4; i++) {
-    const FanConfig& cfg = configuredFans[i];
+
+  for (uint8_t n = 0; n < configuredCount; n++) {
+    const FanConfig& cfg = configuredFans[n];
+    const uint8_t i = places[n];
     const char* token = cfg.token;
     
     // Check buffer space
@@ -732,24 +728,16 @@ size_t WebSocketTelemetry::buildFansSnapshot(uint8_t* buffer, size_t bufferSize)
     // Only check discovered list if fan has a valid IP in NVS config.
     // If IP is 0.0.0.0, this is a freshly added fan - don't use stale discovered entries
     // (e.g., from before the fan was deleted and re-added).
-    bool checkDiscoveredList = (cfg.ip != IPAddress(0, 0, 0, 0));
-    
-    if (checkDiscoveredList) {
-      for (size_t j = 0; j < discoveredCount; j++) {
-        if (strcasecmp(discoveredFans[j].token, token) == 0) {
-          // Get participation state first to determine connected/controlActive
-          FanParticipationState state = SmartMiFanAsync_getFanParticipationState(j);
-          
-          if (state == FanParticipationState::ERROR) {
-            // ERROR state: mark as disconnected so frontend shows ERROR
-            connected = false;
-            controlActive = false;
-          } else {
-            // ACTIVE or INACTIVE: use ready state as connected
-            connected = discoveredFans[j].ready;
-            controlActive = (state == FanParticipationState::ACTIVE);
-          }
-          break;
+    if (cfg.ip != IPAddress(0, 0, 0, 0)) {
+      SmartMiFanInfo info;
+      if (SmartMiFan::info(i, info)) {
+        const FanParticipationState state = SmartMiFan::participation(i);
+        if (state == FanParticipationState::ERROR) {
+          connected = false;
+          controlActive = false;
+        } else {
+          connected = info.ready;
+          controlActive = (state == FanParticipationState::ACTIVE);
         }
       }
     }
@@ -938,7 +926,8 @@ size_t WebSocketTelemetry::buildDiscoveryResults(uint8_t* buffer, size_t bufferS
 }
 
 size_t WebSocketTelemetry::buildFirmwareVersion(uint8_t* buffer, size_t bufferSize) {
-  // Format: [version_len:uint8][version:bytes]
+  // Format: [version_len:uint8][version:bytes][board_len:uint8][board:bytes]
+  // board_len/board are optional (absent without display); older UIs ignore them.
   
   const char* version = BuildInfo::getVersion();
   size_t versionLen = strlen(version);
@@ -957,6 +946,18 @@ size_t WebSocketTelemetry::buildFirmwareVersion(uint8_t* buffer, size_t bufferSi
   offset = writeUint8(buffer, offset, static_cast<uint8_t>(versionLen));
   memcpy(buffer + offset, version, versionLen);
   offset += versionLen;
+
+#if HW_ENABLE_DISPLAY
+  const char* board = g_displayManager ? g_displayManager->boardRevision() : nullptr;
+  if (board) {
+    size_t boardLen = strnlen(board, 8);
+    if (bufferSize >= offset + 1 + boardLen) {
+      offset = writeUint8(buffer, offset, static_cast<uint8_t>(boardLen));
+      memcpy(buffer + offset, board, boardLen);
+      offset += boardLen;
+    }
+  }
+#endif
   
   return offset;
 }
@@ -1016,7 +1017,7 @@ size_t WebSocketTelemetry::buildFirmwareSearchResult(uint8_t* buffer, size_t buf
   offset = writeUint8(buffer, offset, hasUpdate ? 1 : 0);
   
   if (hasUpdate) {
-    // Enforce hard limits: version max 32 chars, notes max 160 chars
+    // Enforce hard limits: version max 32 bytes, notes max 160 bytes (UTF-8, strlen)
     const size_t MAX_VERSION_LEN = 32;
     const size_t MAX_NOTES_LEN = 160;
     
@@ -1052,7 +1053,7 @@ size_t WebSocketTelemetry::buildFirmwareSearchResult(uint8_t* buffer, size_t buf
       offset += versionLen;
     }
     
-    // Write release notes (length-prefixed string, uint16 for length, max 160 chars)
+    // Write release notes (length-prefixed string, uint16 for length, max 160 bytes)
     offset = writeUint16(buffer, offset, static_cast<uint16_t>(notesLen));
     if (notesLen > 0) {
       memcpy(buffer + offset, releaseNotes, notesLen);

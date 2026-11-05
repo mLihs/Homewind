@@ -58,11 +58,13 @@ extern BLERelayManager* g_bleRelayManager;
 #endif
 
 #if HW_ENABLE_FANS
-// Include SystemState.h BEFORE FanController.h (which includes SmartMiFanAsync.h) to avoid name conflict
-#include "../core/SystemState.h"
 #include "../core/FanController.h"
 // Forward declaration - will be set by App
 extern FanController* g_fanController;
+#endif
+
+#if HW_ENABLE_DISPLAY
+#include "../core/DisplayManager.h"
 #endif
 
 #if HW_ENABLE_OTA
@@ -507,7 +509,7 @@ bool ApiActions::resolveFanToken(String& token) {
     FanConfig config;
     bool found = false;
     const char* searchId = token.c_str();
-    for (uint8_t i = 0; i < g_fanController->getFanCount(); i++) {
+    for (uint8_t i = 0; i < FanController::MAX_FANS; i++) {
       if (g_fanController->getFanConfig(i, config)) {
         // Compare first 8 chars without creating substring (avoids heap allocation)
         if (strlen(config.token) >= 8 && strncasecmp(config.token, searchId, 8) == 0) {
@@ -1699,7 +1701,7 @@ void ApiActions::handleFirmwareStatus(AsyncWebServerRequest* request) {
 
 void ApiActions::handleSystemInfo(AsyncWebServerRequest* request) {
   // System info endpoint (read-only)
-  // Returns: name, version, build_id, uptime, free_heap
+  // Returns: name, version, build_id, uptime, free_heap (+ board, te_pulses with display)
   // Fixed-size buffer for deterministic response (no heap allocation)
   static const size_t OUT_BUF_SIZE = 512;
   static_assert(OUT_BUF_SIZE >= 512, "Buffer must be at least 512 bytes");
@@ -1731,6 +1733,16 @@ void ApiActions::handleSystemInfo(AsyncWebServerRequest* request) {
       truncated = true;
     }
   }
+
+#if HW_ENABLE_DISPLAY
+  if (!truncated && g_displayManager && g_displayManager->boardRevision()) {
+    if (!appendf(out, OUT_BUF_SIZE, used, "board=%s\nte_pulses=%lu\n",
+                 g_displayManager->boardRevision(),
+                 static_cast<unsigned long>(g_displayManager->tePulseCount()))) {
+      truncated = true;
+    }
+  }
+#endif
   
   if (truncated) {
     // Indicate truncation in response

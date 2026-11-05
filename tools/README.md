@@ -1,5 +1,50 @@
 # Homewind Build Tools
 
+## build.sh
+
+Compiles both firmware variants with `arduino-cli`, flashes them from the terminal, and refreshes the ESP Web Tools files.
+
+| Variant | Board | `HW_ENABLE_DISPLAY` | Website directory |
+|---------|-------|---------------------|-------------------|
+| `touch` | Waveshare ESP32-S3-Touch-AMOLED-1.64 | 1 | `homewind-touch` |
+| `basic` | XIAO ESP32-S3 | 0 | `homewind-basic` |
+
+Touch uses the FQBN from `ARDUINO_SETUP.md` (PSRAM enabled, 16MB partition, USB CDC on boot). Basic uses the XIAO defaults: 8MB flash, 3MB APP partition, PSRAM off, USB CDC on boot.
+
+Workspace copies of `HomeWindWSAmoled`, `SmartMiFanAsync`, `wifiMangerLite`, `GitFirmwareUpdate`, `NVSUtilityLibrary` and `DebugLog` override the copies in `~/Documents/Arduino/libraries`. Other libraries (LVGL, NimBLE, ESPAsyncWebServer, …) still come from the Arduino libraries folder.
+
+```bash
+# Build both variants, write local manifest.json, copy bins to the website tree
+./tools/build.sh
+
+# One variant
+./tools/build.sh touch
+./tools/build.sh basic
+
+# Build without copying to the website (local manifest.json is still updated)
+./tools/build.sh all --no-deploy
+
+# Build and flash (port is auto-detected when exactly one board is connected)
+./tools/build.sh touch --flash
+./tools/build.sh basic --flash --port /dev/cu.usbmodem1101
+
+# Flash an existing build without compiling
+./tools/build.sh flash touch
+
+# List serial ports
+./tools/build.sh ports
+```
+
+Every successful build refreshes `build/<board>/manifest.json` for ESP Web Tools. `--no-deploy` skips only the website copy. `--clean` deletes the object cache before compiling.
+
+Outputs:
+
+- `build/esp32.esp32.waveshare_esp32_s3_touch_amoled_164/` and `build/esp32.esp32.XIAO_ESP32S3/` — bins, `flash_args`, `manifest.json` (what ESP Web Tools needs)
+- `build/.cache/` — object files, gitignored
+- `~/Documents/Works/Homewind/Website/src/firmware/homewind-touch/` and `homewind-basic/` — the same bins plus `manifest.json` and `latest.json`. `notes` must be at most 160 UTF-8 bytes, the same limit the ESP uses for the web UI. Longer text stops the deploy. Umlauts and emoji count as multiple bytes.
+
+Each run writes a stamp header (`FW_VERSION` from `library.properties`, `FW_BUILD_ID` as `YYYYMMDD-HHMMSS`, and `HW_ENABLE_DISPLAY`) into the build cache. `Config.h` and `BuildInfo.h` pick it up when it is on the include path; Arduino IDE builds keep the defaults in those headers. After linking, the script checks that the Touch binary contains the touch OTA URL and the Basic binary the basic URL.
+
 ## update_manifest.py
 
 Generates [ESP Web Tools](https://esphome.github.io/esp-web-tools/) `manifest.json` files from Arduino IDE build output.

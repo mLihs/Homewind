@@ -41,6 +41,9 @@ FanHRAdapter::FanHRAdapter()
   , _globalTargetSpeedPct(0)
   , _maxSpeedLatch(false)
   , _postConnectResetPending(false)
+  , _powerSeq(0)
+  , _speedSeq(0)
+  , _pendingSpeedPct(0)
 {
   clearHrBuffer();
   memset(_lastSentSpeedPct, 0, sizeof(_lastSentSpeedPct));
@@ -139,6 +142,34 @@ void FanHRAdapter::onPostConnectControlComplete() {
 
   HW_DEBUG_PRINTF("[FanHRAdapter] Post-connect control complete: reset HR tracking (t=%lums)\n",
                   (unsigned long)millis());
+}
+
+void FanHRAdapter::clearCommandWaiters() {
+  _powerSeq = 0;
+  _speedSeq = 0;
+}
+
+void FanHRAdapter::onGroupDone(const EventInfo& ev) {
+  if (ev.kind == CmdKind::POWER && _powerSeq != 0 && ev.seq == _powerSeq) {
+    for (uint8_t i = 0; i < MAX_FANS; ++i) {
+      if (ev.okMask & static_cast<FanMask>(1u << i)) {
+        _lastSentPowerOn[i] = _globalTargetPower;
+        if (!_globalTargetPower) _lastSentSpeedPct[i] = 0;
+      }
+    }
+    _powerSeq = 0;
+  }
+  if (ev.kind == CmdKind::SPEED && _speedSeq != 0 && ev.seq == _speedSeq) {
+    for (uint8_t i = 0; i < MAX_FANS; ++i) {
+      if (ev.okMask & static_cast<FanMask>(1u << i)) {
+        _lastSentSpeedPct[i] = _pendingSpeedPct;
+      }
+    }
+    if (ev.anyOk && _pendingSpeedPct == HW_FAN_MAX_SPEED_PERCENT) {
+      _maxSpeedLatch = true;
+    }
+    _speedSeq = 0;
+  }
 }
 
 void FanHRAdapter::loop(uint32_t nowMs) {
@@ -355,10 +386,13 @@ void FanHRAdapter::applyControl(uint32_t nowMs) {
       lastHrValidState = _hrValid; // now disconnected
       if (everHadHr) {
         HW_DEBUG_PRINTLN("[FanHRAdapter] HR disconnected: turning off fans (fail-safe)");
-        SmartMiFanAsync_setPowerAllOrchestrated(false); // immediate OFF
-        for (size_t i = 0; i < MAX_FANS; i++) {
-          _lastSentSpeedPct[i] = 0;
-          _lastSentPowerOn[i] = false;
+        const CmdAccept acc = SmartMiFan::setPowerAll(false);
+        if (acc.result != CmdResult::REJECTED) {
+          _powerSeq = acc.seq;
+          for (size_t i = 0; i < MAX_FANS; i++) {
+            _lastSentSpeedPct[i] = 0;
+            _lastSentPowerOn[i] = false;
+          }
         }
         // Schedule exactly one re-assert after 10 seconds
         reassertPending = true;
@@ -373,9 +407,14 @@ void FanHRAdapter::applyControl(uint32_t nowMs) {
     } else if (reassertPending && !reassertSent) {
       const uint32_t FAILSAFE_REASSERT_DELAY_MS = 10000;
       if (nowMs - disconnectAtMs >= FAILSAFE_REASSERT_DELAY_MS) {
-        SmartMiFanAsync_setPowerAllOrchestrated(false); // one-time re-assert
-        reassertSent = true;
-        reassertPending = false;
+        const CmdAccept acc = SmartMiFan::setPowerAll(false);
+        if (acc.result != CmdResult::REJECTED) {
+          _powerSeq = acc.seq;
+          reassertSent = true;
+          reassertPending = false;
+        } else {
+          disconnectAtMs = nowMs;
+        }
       }
     }
     return;
@@ -392,10 +431,8 @@ void FanHRAdapter::applyControl(uint32_t nowMs) {
   
   // HR valid: normal operation - get discovered fans (expensive operation)
   // Use SmartMiFanAsync as Single Source of Truth for fan state
-  size_t discoveredCount = 0;
-  const SmartMiFanDiscoveredDevice* discovered = SmartMiFanAsync_getDiscoveredFans(discoveredCount);
-  
-  if (!discovered || discoveredCount == 0) {
+  const FanMask used = SmartMiFan::used();
+  if (used == 0) {
     // No fans discovered yet (SmartConnect still running or failed)
     // Don't log every cycle - only on state change
     static bool noFansLogged = false;
@@ -409,7 +446,7 @@ void FanHRAdapter::applyControl(uint32_t nowMs) {
   // Log once when fans become available
   static bool fansReadyLogged = false;
   if (!fansReadyLogged) {
-    HW_DEBUG_PRINTF("[FanHRAdapter] SmartConnect ready - %zu fan(s) discovered\n", discoveredCount);
+    HW_DEBUG_PRINTF("[FanHRAdapter] SmartConnect ready - fans mask=0x%02X\n", used);
     fansReadyLogged = true;
   }
   
@@ -438,9 +475,9 @@ void FanHRAdapter::applyControl(uint32_t nowMs) {
   } fanStates[MAX_FANS];
   uint8_t activeFanCount = 0;
   
-  for (size_t i = 0; i < discoveredCount && i < MAX_FANS; i++) {
-    const auto& fan = discovered[i];
-    if (!_fanController->isFanActiveForHr(i, fan)) {
+  for (uint8_t i = 0; i < MAX_FANS; i++) {
+    if ((used & static_cast<FanMask>(1u << i)) == 0) continue;
+    if (!_fanController->isFanActiveForHr(i)) {
       // Reset tracking for non-ACTIVE fans so they get power ON when re-activated
       // This ensures that when a fan switches from INACTIVE back to ACTIVE,
       // the HR adapter will see _lastSentPowerOn[i] == false and send power ON
@@ -491,19 +528,10 @@ void FanHRAdapter::applyControl(uint32_t nowMs) {
                       (unsigned long)nowMs,
                       _globalTargetSpeedPct);
     }
-    FANHR_DEBUG_PRINTF("[FanHRAdapter] Calling setPowerAllOrchestrated(%s)\n", _globalTargetPower ? "ON" : "OFF");
-    bool result = SmartMiFanAsync_setPowerAllOrchestrated(_globalTargetPower);
-    FANHR_DEBUG_PRINTF("[FanHRAdapter] Power %s (orchestrated, result=%d)\n", _globalTargetPower ? "ON" : "OFF", result);
-    
-    // Update tracking for all HR-active fans (includes soft-error fans)
-    for (size_t i = 0; i < discoveredCount && i < MAX_FANS; i++) {
-      const auto& fan = discovered[i];
-      if (_fanController->isFanActiveForHr(i, fan)) {
-        _lastSentPowerOn[i] = _globalTargetPower;
-        if (!_globalTargetPower) {
-          _lastSentSpeedPct[i] = 0;
-        }
-      }
+    FANHR_DEBUG_PRINTF("[FanHRAdapter] Calling setPowerAll(%s)\n", _globalTargetPower ? "ON" : "OFF");
+    const CmdAccept acc = SmartMiFan::setPowerAll(_globalTargetPower);
+    if (acc.result != CmdResult::REJECTED) {
+      _powerSeq = acc.seq;
     }
   }
   
@@ -535,52 +563,24 @@ void FanHRAdapter::applyControl(uint32_t nowMs) {
       HW_DEBUG_PRINTF("[FanHRAdapter] Max speed latch released (speed < %u%%)\n", (unsigned)HW_FAN_MAX_SPEED_PERCENT);
     }
     
-    // Check rate limiting: only send if at least 1000ms since last command
-    const uint32_t MIN_COMMAND_INTERVAL_MS = 1000;
-    bool canSendNow = (nowMs - _lastCommandSentMs >= MIN_COMMAND_INTERVAL_MS);
-    
-    if (!canSendNow) {
-      FANHR_DEBUG_PRINTF("[FanHRAdapter] Rate limited: speed %u%% queued (last command %lums ago)\n",
-                     targetSpeed, (unsigned long)(nowMs - _lastCommandSentMs));
-      return; // Wait for next cycle
+    if (SmartMiFan::commandPending(CmdKind::POWER) || _powerSeq != 0) {
+      return;
     }
-    
-    FANHR_DEBUG_PRINTF("[FanHRAdapter] Calling setSpeedAllOrchestrated(%u%%)\n", targetSpeed);
-    bool result = SmartMiFanAsync_setSpeedAllOrchestrated(targetSpeed);
-    
-    if (result) {
-      _lastCommandSentMs = nowMs;
-      FANHR_DEBUG_PRINTF("[FanHRAdapter] Speed set to %u%% (orchestrated, HR=%u, smoothed=%u)\n",
-                     targetSpeed, _hrRaw, _hrUsed);
 
+    FANHR_DEBUG_PRINTF("[FanHRAdapter] Calling setSpeedAll(%u%%)\n", targetSpeed);
+    const CmdAccept acc = SmartMiFan::setSpeedAll(targetSpeed);
+    if (acc.result != CmdResult::REJECTED) {
+      _speedSeq = acc.seq;
+      _pendingSpeedPct = targetSpeed;
+      _lastCommandSentMs = nowMs;
       if (_postConnectResetPending) {
-        HW_DEBUG_PRINTF("[FanHRAdapter] HR reassert after post-connect: speed %u%% sent (t=%lums)\n",
-                        targetSpeed, (unsigned long)nowMs);
         _postConnectResetPending = false;
       }
-      
-      // Set max speed latch when HW_FAN_MAX_SPEED_PERCENT is successfully sent
       if (targetSpeed == HW_FAN_MAX_SPEED_PERCENT) {
         s_maxSpeedSendCount++;
-        _maxSpeedLatch = true;
-        HW_DEBUG_PRINTF("[FanHRAdapter] Max speed SEND #%lu (t=%lums, target=%u%%, HR=%u, smoothed=%u) → latch SET\n",
-                        (unsigned long)s_maxSpeedSendCount,
-                        (unsigned long)nowMs,
-                        (unsigned)HW_FAN_MAX_SPEED_PERCENT,
-                        (unsigned)_hrRaw,
-                        (unsigned)_hrUsed);
-      }
-      
-      // Update tracking for all HR-active fans (includes soft-error fans)
-      for (size_t i = 0; i < discoveredCount && i < MAX_FANS; i++) {
-        const auto& fan = discovered[i];
-        if (_fanController->isFanActiveForHr(i, fan)) {
-          _lastSentSpeedPct[i] = targetSpeed;
-        }
       }
     } else {
-      FANHR_DEBUG_PRINTF("[FanHRAdapter] Speed command failed: %u%% (no ACTIVE fans?)\n", targetSpeed);
-      // Note: Don't set latch on failure - will retry next cycle
+      FANHR_DEBUG_PRINTF("[FanHRAdapter] Speed command rejected: %u%%\n", targetSpeed);
     }
   } else if (_globalTargetPower && !needsSpeedUpdate && activeFanCount > 0) {
     // Display fan states when speed is suppressed (only if we have active fans)

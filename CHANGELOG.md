@@ -5,6 +5,62 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0] - 2026-10-31
+
+### Changed
+- **SmartMiFan 2.0:** NVS place = library slot. Fan commands are queued from web handlers and run on `loop()`.
+- **NVS v3:** fixed four places with a `used` flag; v2 compact blobs are expanded on first boot.
+- **Handshake TTL:** runtime `setHandshakeTtlS()`, default 60 s, stored in NVS.
+
+### Removed
+- Token-to-discovered-index mapping and the `SystemState` include workaround.
+
+- **Version:** 1.5.0, **Build ID:** `20261031-190000`
+- **Dependency:** SmartMiFanAsync >= 2.0.0
+
+---
+
+## [1.4.54] - 2026-10-31
+
+### Fixed – BLE discovery stop
+
+- **Dependency:** Requires BluetoothBikeSensorServer 2.2.21.0 (discovery stop completes; connect retries off with NimBLE 2.5.x).
+- **Known limitation:** `BLERelayManager::stopDiscovery()` clears its active flag before the library has published partial results. A start during that window is rejected and the previous completion callback clears the flag. This coordination moves to the 3.0 command/event design.
+
+- **Version:** 1.4.54, **Build ID:** `20261031-162100`
+
+---
+
+## [1.4.53] - 2026-10-31
+
+### Fixed – SmartMi fan command reliability
+
+- **HR control:** Power-command tracking now changes only when the aggregate orchestrated call succeeds; failed or coalesced calls remain eligible for retry.
+- **HR fail-safe:** A failed OFF re-assert is retried after another 10 seconds while HR remains disconnected.
+- **Auto-recovery:** Unhealthy observations are counted at most once every 3 seconds, giving the soft-error phase an effective duration of about 12 seconds.
+- **Soft-active synchronization:** Homewind now forwards its soft-error participation state to SmartMiFanAsync so transiently unhealthy fans continue receiving retry commands.
+- **Dependency:** Requires SmartMiFanAsync 1.8.4 or newer.
+
+- **Version:** 1.4.53, **Build ID:** `20261031-091400`
+
+---
+
+## [1.4.52] - 2026-10-29
+
+### Fixed – Waveshare AMOLED 1.64 board V1.1
+
+- **HomeWindWSAmoled 1.5.10:** Display stayed black on board revision V1.1 (chip select on GPIO 46 instead of 9). The revision is now detected at startup; V1 and V1.1 run the same firmware.
+
+### Added
+
+- **WebUI:** System section shows the detected board: "Firmware: x.y.z · Board V1.1". `FIRMWARE_VERSION` frame (0x08) carries an optional `[board_len][board]` after the version; older UIs ignore it.
+- **API:** `/api/v1/system/info` adds `board=` and `te_pulses=` on display builds.
+- **DisplayManager:** `boardRevision()`, `tePulseCount()`; boot log `[Display] Initialized (board V1, TE pulses 0)`.
+
+- **Version:** 1.4.52, **Build ID:** `20261029-215000`
+
+---
+
 ## [1.4.51] - 2026-02-20
 
 ### Added – Boot and AP Screen Integration
@@ -17,7 +73,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **00_INDEX.md:** Version 1.4.51, Last Updated 2026-02-20; BOOT_AND_AP_SCREEN_IMPLEMENTATION_PLAN marked as implemented.
 
-- **Version:** 1.4.51, **Build ID:** `20260220-120000`
+### Fixed
+
+- **BuildInfo.h:** `FW_VERSION` was still `1.4.50`, so devices kept offering the 1.4.51 OTA update after installing it. Rebuilt with ESP32 core 3.3.12 (3.3.11 places WiFi/lwIP buffers in internal RAM, see `ARDUINO_SETUP.md`).
+
+- **Version:** 1.4.51, **Build ID:** `20261029-042700`
 - **Zip release:** `Homewind-1.4.51.zip`
 
 ---

@@ -19,9 +19,7 @@ extern BLERelayManager* g_bleRelayManager;
 #if HW_ENABLE_FANS
 #include "FanController.h"
 extern FanController* g_fanController;
-#define SystemState SmartMiFanAsync_SystemState
 #include <SmartMiFanAsync.h>
-#undef SystemState
 #endif
 
 #include <HomeWindWSAmoled.h>
@@ -56,8 +54,18 @@ bool DisplayManager::begin() {
   homewind_set_fan_toggle_callback(staticFanToggleCallback);
 
   _initialized = true;
-  HW_DEBUG_PRINTLN("[Display] Initialized");
+  HW_DEBUG_PRINTF("[Display] Initialized (board %s, TE pulses %lu)\n",
+                  homewind_get_board_revision_name(),
+                  static_cast<unsigned long>(homewind_get_te_pulse_count()));
   return true;
+}
+
+const char* DisplayManager::boardRevision() const {
+  return _initialized ? homewind_get_board_revision_name() : nullptr;
+}
+
+uint32_t DisplayManager::tePulseCount() const {
+  return homewind_get_te_pulse_count();
 }
 
 void DisplayManager::loop() {
@@ -182,36 +190,21 @@ void DisplayManager::updateFans() {
 #if HW_ENABLE_FANS
   if (!g_fanController) return;
 
-  uint8_t fanCount = g_fanController->getFanCount();
-
-  SmartMiFanDiscoveredDevice discovered[4];
-  size_t discoveredCount = 0;
-  g_fanController->getDiscoveredFans(static_cast<void*>(discovered), discoveredCount);
-
-  for (uint8_t i = 0; i < 4; i++) {
-    if (i >= fanCount) {
-      homewind_set_fan_state(i, FAN_STATE_NOT_CONFIGURATED);
-      continue;
-    }
-
+  for (uint8_t i = 0; i < FanController::MAX_FANS; i++) {
     FanConfig cfg;
     if (!g_fanController->getFanConfig(i, cfg)) {
       homewind_set_fan_state(i, FAN_STATE_NOT_CONFIGURATED);
       continue;
     }
 
-    fan_state_t state = FAN_STATE_INACTIVE;  /* Default: configured but not yet discovered */
+    SmartMiFanInfo info;
+    fan_state_t state = FAN_STATE_INACTIVE;
     bool isOn = false;
-
-    for (size_t j = 0; j < discoveredCount; j++) {
-      if (strcasecmp(discovered[j].token, cfg.token) == 0) {
-        FanParticipationState p = SmartMiFanAsync_getFanParticipationState(static_cast<uint8_t>(j));
-        state = (p == FanParticipationState::ERROR || !discovered[j].ready) ? FAN_STATE_ERROR : FAN_STATE_ACTIVE;
-        isOn = (p == FanParticipationState::ACTIVE);
-        break;
-      }
+    if (SmartMiFan::info(i, info)) {
+      const FanParticipationState p = SmartMiFan::participation(i);
+      state = (p == FanParticipationState::ERROR || !info.ready) ? FAN_STATE_ERROR : FAN_STATE_ACTIVE;
+      isOn = (p == FanParticipationState::ACTIVE);
     }
-
     homewind_set_fan(i, state, isOn);
   }
 #endif

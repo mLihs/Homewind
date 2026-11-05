@@ -18,6 +18,7 @@
 #if HW_ENABLE_FANS && HW_ENABLE_BLE
 
 #include <Arduino.h>
+#include <SmartMiFanAsync.h>
 
 // Forward declarations
 class FanController;
@@ -90,6 +91,8 @@ public:
    * Reset tracking so HR-driven control resumes immediately.
    */
   void onPostConnectControlComplete();
+  void onGroupDone(const EventInfo& ev);
+  void clearCommandWaiters();
   
   /**
    * HR input event: new sample received
@@ -153,6 +156,7 @@ private:
   
   // Per-fan runtime state (indexed by fan index)
   static const uint8_t MAX_FANS = 4;
+  static_assert(MAX_FANS == SMARTMIFAN_MAX_FANS, "FanHRAdapter slots must match the library");
   uint8_t _lastSentSpeedPct[MAX_FANS];  // Last sent speed per fan
   bool _lastSentPowerOn[MAX_FANS];       // Last sent power state per fan
   FanHrMode _fanHrModes[MAX_FANS];      // Per-fan HR mode
@@ -161,6 +165,9 @@ private:
   // Set to true when HW_FAN_MAX_SPEED_PERCENT is successfully sent,
   // reset when speed drops below HW_FAN_MAX_SPEED_PERCENT
   bool _maxSpeedLatch;
+  uint8_t _powerSeq;
+  uint8_t _speedSeq;
+  uint8_t _pendingSpeedPct;
   
   // Internal methods
   void clearHrBuffer();

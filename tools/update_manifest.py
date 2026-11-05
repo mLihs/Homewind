@@ -3,7 +3,7 @@
 Update ESP Web Tools manifest.json from Arduino build output.
 
 Parses flash_args for filenames/offsets, reads version from library.properties,
-and optionally copies firmware files to the website directory.
+and optionally copies firmware files plus latest.json to the website directory.
 
 Usage:
     python3 tools/update_manifest.py                    # update all builds
@@ -38,6 +38,10 @@ BOARD_CONFIG = {
 }
 
 WEBSITE_FIRMWARE_DIR = Path.home() / "Documents/Works/Homewind/Website/src/firmware"
+
+# FIRMWARE_SEARCH_RESULT copies at most this many bytes (WebSocketTelemetry strlen limit).
+# Umlauts and emoji use more than one byte, so the limit is not a character count.
+MAX_NOTES_BYTES = 160
 
 
 def read_version() -> str:
@@ -93,8 +97,52 @@ def write_manifest(manifest: dict, path: Path) -> None:
     print(f"  Written: {path}")
 
 
+def read_notes(latest_path: Path) -> str:
+    """Read the notes field. Missing file or missing field means empty notes."""
+    if not latest_path.exists():
+        return ""
+    try:
+        notes = json.loads(latest_path.read_text()).get("notes", "")
+    except json.JSONDecodeError:
+        print(f"  WARNING: {latest_path} is not valid JSON, notes left empty")
+        return ""
+    if notes is None:
+        return ""
+    if not isinstance(notes, str):
+        raise SystemExit(f"  ERROR: notes in {latest_path} must be a string")
+    return notes
+
+
+def ensure_notes_fit(notes: str, latest_path: Path) -> int:
+    """Reject notes the ESP would truncate in the web UI.
+
+    The limit is 160 UTF-8 bytes, the same cut WebSocketTelemetry applies with strlen.
+    """
+    size = len(notes.encode("utf-8"))
+    if size > MAX_NOTES_BYTES:
+        raise SystemExit(
+            f"  ERROR: notes in {latest_path} are {size} bytes "
+            f"(max {MAX_NOTES_BYTES}). Longer text is cut off in the web UI. "
+            f"Umlauts and emoji count as multiple bytes."
+        )
+    print(f"  notes: {size}/{MAX_NOTES_BYTES} bytes")
+    return size
+
+
+def update_latest_json(dest: Path, version: str, website_dir_name: str, notes: str) -> None:
+    """Write OTA latest.json. Notes were already checked against MAX_NOTES_BYTES."""
+    latest_path = dest / "latest.json"
+    payload = {
+        "version": version,
+        "url": f"http://homewind.io/src/firmware/{website_dir_name}/Homewind.ino.bin",
+        "notes": notes,
+    }
+    latest_path.write_text(json.dumps(payload, indent=2) + "\n")
+    print(f"  Written: {latest_path}")
+
+
 def deploy_to_website(build_path: Path, website_dir_name: str, manifest: dict) -> None:
-    """Copy manifest + .bin files to the website firmware directory."""
+    """Copy manifest, latest.json and .bin files to the website firmware directory."""
     dest = WEBSITE_FIRMWARE_DIR / website_dir_name
     if not dest.parent.exists():
         print(f"  SKIP deploy: {dest.parent} does not exist")
@@ -102,7 +150,11 @@ def deploy_to_website(build_path: Path, website_dir_name: str, manifest: dict) -
 
     dest.mkdir(parents=True, exist_ok=True)
 
+    notes = read_notes(dest / "latest.json")
+    ensure_notes_fit(notes, dest / "latest.json")
+
     write_manifest(manifest, dest / "manifest.json")
+    update_latest_json(dest, manifest["version"], website_dir_name, notes)
 
     for part in manifest["builds"][0]["parts"]:
         src = build_path / part["path"]

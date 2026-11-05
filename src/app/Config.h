@@ -9,6 +9,14 @@
 #ifndef HOMEWIND_CONFIG_H
 #define HOMEWIND_CONFIG_H
 
+// Optional stamp written by tools/build.sh (version, build id, display flag).
+// Arduino IDE builds do not have this header and keep the defaults below.
+#if defined(__has_include)
+#  if __has_include("homewind_build_stamp.h")
+#    include "homewind_build_stamp.h"
+#  endif
+#endif
+
 // ============================================================
 // Development Mode (compile-time only)
 // ============================================================
@@ -159,11 +167,11 @@
 // In PROD mode (HW_WIFI_BACKEND_WML), credentials come from NVS via Captive Portal
 #if HW_WIFI_BACKEND_FIXED == 1
   #ifndef HW_WIFI_SSID
-  #define HW_WIFI_SSID "Martins-Wifi"
+  #define HW_WIFI_SSID "YOUR_WIFI_SSID"
   #endif
 
   #ifndef HW_WIFI_PASS
-  #define HW_WIFI_PASS "rockerwf300fbwelg1"
+  #define HW_WIFI_PASS "YOUR_WIFI_PASSWORD"
   #endif
 
   // WiFi AP mode credentials (fallback mode - DEV only)
@@ -226,12 +234,20 @@
 #define HW_FAN_AUTO_RECOVERY_UNHEALTHY_CHECKS 5
 #endif
 
+#ifndef HW_FAN_AUTO_RECOVERY_CHECK_INTERVAL_MS
+#define HW_FAN_AUTO_RECOVERY_CHECK_INTERVAL_MS 3000  // One unhealthy observation per fan per interval
+#endif
+
 #ifndef HW_FAN_AUTO_RECOVERY_MAX_ATTEMPTS
 #define HW_FAN_AUTO_RECOVERY_MAX_ATTEMPTS 3
 #endif
 
 #ifndef HW_FAN_AUTO_RECOVERY_RETRY_INTERVAL_MS
 #define HW_FAN_AUTO_RECOVERY_RETRY_INTERVAL_MS 15000
+#endif
+
+#ifndef HW_FAN_HANDSHAKE_TTL_S
+#define HW_FAN_HANDSHAKE_TTL_S 60
 #endif
 
 // Debug logging (production builds should disable this)
@@ -248,7 +264,7 @@
 // Serial debug commands (type 'h' for heap info, '?' for help)
 // Disable in production to save code size
 #ifndef HW_ENABLE_SERIAL_COMMANDS
-#define HW_ENABLE_SERIAL_COMMANDS 1
+#define HW_ENABLE_SERIAL_COMMANDS 0
 #endif
 
 // Heap Diagnostics Runtime Tick interval (milliseconds)
