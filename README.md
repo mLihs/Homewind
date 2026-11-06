@@ -49,7 +49,7 @@ Bluetooth Low Energy heart rate, power, speed and cadence sensors. ANT+ is not s
 
 Homewind remembers a sensor by its Bluetooth address. If a sensor is not found after sleep, wait up to 5 minutes; only then search for it again in the **BLE** section. Some sensors use a random address (for example CAD-BLE cadence sensors) and can change it after deep sleep; Homewind then no longer finds them until they are searched again.
 
-Garmin Cadence Sensor 2: after 2–3 minutes without movement the sensor ends the connection and then stays silent for up to about 5 minutes, even if the crank turns. Homewind connects again on its own at most about 35 seconds after the sensor is back. Removing the battery skips the pause.
+Garmin Cadence Sensor 2: after 2–3 minutes without movement the sensor ends the connection and then stays silent for up to about 5 minutes, even if the crank turns. A blinking LED shows that the sensor is awake again. Homewind connects again on its own at most about 35 seconds after the sensor is back. Removing the battery skips the pause.
 
 ## Build from source
 
