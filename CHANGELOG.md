@@ -44,6 +44,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `WebSocketTelemetry` dirty flags are not atomic (`markDirty` from the web task); the review recommended fixing this now (about 5 lines), it was deferred.
 - Heart-rate settings are still written to NVS from the web task.
 - A fan change queued in the same loop pass in which maintenance starts is discarded although HTTP answered 200.
+- Garmin Cadence Sensor 2 stays silent for up to about 5 minutes after it ends the connection when idle; Homewind reconnects once it advertises again (sensor behaviour, documented in the README; no change planned).
 
 ### Tests
 
