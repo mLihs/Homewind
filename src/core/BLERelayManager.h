@@ -253,6 +253,7 @@ private:
   void setTargetsFromConfig();
   void processDiscoveryOps();
   void processEvents();
+  void adoptSensorAddress(uint8_t typeBit);
   void runReconcile(bool throttled);
   void refreshSnapshot();
   void markSensorsDirty();

@@ -90,9 +90,9 @@ Alle unter `~/Documents/Arduino/libraries/`. Für NimBLE-Arduino muss dort die g
 | ESP Async WebServer | 3.12.0 |
 | Async TCP | 3.5.0 |
 | ArduinoJson | 7.4.3 |
-| BluetoothBikeSensorServer | 3.0.0 (≥ 3.0.0, API `BikeSensor.h`) |
+| BluetoothBikeSensorServer | 3.1.0 (≥ 3.1.0, API `BikeSensor.h`) |
 | SmartMiFanAsync | 2.0.0 |
-| wifiMangerLite | 3.0.0 |
+| wifiMangerLite | 3.1.0 (≥ 3.1.0) |
 | NVSUtilityLibrary | 1.0.1 |
 | DebugLog | 1.1.0 |
 | GitFirmwareUpdate | 1.0.4 |

@@ -65,7 +65,8 @@ class LibraryPort : public hw::BleLibraryPort {
 public:
   bool connected(uint8_t typeBit) override { return BikeSensor::connected(toSensorType(typeBit)); }
   bool add(uint8_t typeBit, const char* mac, int8_t addrType, const char* name) override {
-    const bool ok = BikeSensor::addByMac(toSensorType(typeBit), mac, addrType, name);
+    const bool nameFallback = addrType != 0 && name && name[0] != '\0';
+    const bool ok = BikeSensor::addByMac(toSensorType(typeBit), mac, addrType, name, nameFallback);
     HW_DEBUG_PRINTF("[BLE] addByMac type=%u mac=%s addrType=%d -> %s\n",
                     typeBit, mac, addrType, ok ? "ok" : "rejected");
     return ok;
@@ -615,6 +616,7 @@ void BLERelayManager::processEvents() {
     switch (type) {
       case BikeSensor::EventType::SENSOR_CONNECTED:
         HW_DEBUG_PRINTF("[BLE] Sensor connected: %s\n", typeStr);
+        adoptSensorAddress(typeBit);
         refreshSnapshot();
         if (!_serverPaused) markSensorsDirty();
         notifyDisplay(typeBit);
@@ -701,6 +703,32 @@ void BLERelayManager::processEvents() {
 #endif
   }
   _doneCount = 0;
+}
+
+// A name-fallback slot may connect under a new random address: keep it in the
+// config and NVS so the next boot uses it, without a re-add.
+void BLERelayManager::adoptSensorAddress(uint8_t typeBit) {
+  if (MaintenanceMode::admissionClosed()) return;
+  const int i = findConfigByType(typeBit);
+  BikeSensor::SensorInfo info;
+  if (i < 0 || !BikeSensor::info(toSensorType(typeBit), info)) return;
+  SensorConfig& cfg = _configuredSensors[i];
+  char mac[18];
+  formatMac(mac, info.mac);
+  if (strcasecmp(cfg.mac, mac) == 0 && cfg.addrType == info.addrType) return;
+  if (!_reconciler.adoptApplied(typeBit, mac, info.addrType)) {
+    HW_DEBUG_PRINTF("[BLE] %s address %s/%d not adopted (not applied or change pending)\n", cfg.type, mac,
+                    info.addrType);
+    return;
+  }
+  HW_DEBUG_PRINTF("[BLE] %s address changed: %s/%d -> %s/%d\n", cfg.type, cfg.mac,
+                  cfg.addrType, mac, info.addrType);
+  copyStr(cfg.mac, mac, sizeof(cfg.mac));
+  cfg.addrType = info.addrType;
+  if (!saveConfigToNVS()) {
+    HW_ERROR_PRINTLN("[BLE] Failed to save sensor configuration");
+  }
+  _reconcileScheduled = true;   // the other slot's duplicate may apply now
 }
 
 void BLERelayManager::runReconcile(bool throttled) {

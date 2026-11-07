@@ -172,6 +172,26 @@ public:
     }
   }
 
+  // The library followed the applied sensor to a new address (name fallback):
+  // target and applied take it without a re-add. False while the slot is not
+  // added or a different target is pending; nothing changes then. A duplicate
+  // in the other slot is retried on the next run().
+  bool adoptApplied(uint8_t typeBit, const char* mac, int8_t addrType) {
+    const int i = bleSlotOf(typeBit);
+    if (i < 0 || !bleAddressValid(mac, addrType)) return false;
+    Target& t = _target[i];
+    Applied& a = _applied[i];
+    if (!a.added || t.dirty || strcasecmp(a.mac, t.mac) != 0 || a.addrType != t.addrType) {
+      return false;
+    }
+    copy(t.mac, mac, kMacLen);
+    copy(a.mac, mac, kMacLen);
+    t.addrType = addrType;
+    a.addrType = addrType;
+    identityChanged(static_cast<uint8_t>(i));
+    return true;
+  }
+
   // Maintenance: the library slots are removed directly.
   void forgetApplied() {
     for (uint8_t i = 0; i < kBleSlots; ++i) {

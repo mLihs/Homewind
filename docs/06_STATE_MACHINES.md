@@ -256,7 +256,7 @@ PHASE_ERROR → [abort/reset] → PHASE_IDLE
 
 ### Dirty-Flag State
 
-**Dirty Flags**: `uint16_t dirtyFlags` (bitfield)
+**Dirty Flags**: `std::atomic<uint16_t> dirtyFlags` (bitfield; `markDirty()` sets bits with `fetch_or` from any task, `loopFlush()` takes them with `exchange(0)`)
 
 Each frame type has a bit:
 - `SYSTEM_STATUS` (0x01) → bit 0

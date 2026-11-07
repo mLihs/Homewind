@@ -20,6 +20,7 @@
 #define HOMEWIND_WEBSOCKET_TELEMETRY_H
 
 #include <Arduino.h>
+#include <atomic>
 #include "../app/Config.h"
 
 #if HOMEWIND_ENABLE_WEBSOCKET
@@ -127,8 +128,8 @@ private:
   bool initialized;
   AsyncWebSocket* wsSocket;
   
-  // Dirty flags: bitfield of frame types that need to be sent
-  uint16_t dirtyFlags;
+  // Dirty flags: bitfield of frame types that need to be sent (any task sets, loopFlush drains)
+  std::atomic<uint16_t> dirtyFlags;
 
 #if HW_ENABLE_TELEMETRY_DIAG && HW_ENABLE_DEBUG_LOGS
   // Telemetry diagnostics (compile-time only)

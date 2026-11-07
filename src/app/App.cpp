@@ -1031,6 +1031,12 @@ void App::loopSubsystems() {
   }
 #endif
 
+#if HW_ENABLE_NVS
+  if (heartRateSettings && heartRateSettingsReady) {
+    heartRateSettings->loop();
+  }
+#endif
+
 #if HW_ENABLE_BLE
   // Initialize BLE after Fans POST_CTRL_DONE completes (optimized boot sequence)
   // This reduces heap fragmentation: small Fans allocation before large BLE allocation

@@ -1348,12 +1348,14 @@ void ApiActions::handleHeartRateSetMin(AsyncWebServerRequest* request) {
   }
   
   uint16_t minValue = static_cast<uint16_t>(value);
-  if (g_heartRateSettings->setMin(minValue)) {
+  uint16_t newMin;
+  uint16_t newMax;
+  if (g_heartRateSettings->requestMin(minValue, newMin, newMax)) {
     char json[128];
-    snprintf(json, sizeof(json), "{\"min\":%u,\"max\":%u}", 
-             g_heartRateSettings->getMin(), 
-             g_heartRateSettings->getMax());
+    snprintf(json, sizeof(json), "{\"min\":%u,\"max\":%u}", newMin, newMax);
     sendJSON(request, 200, json);
+  } else if (MaintenanceMode::admissionClosed()) {
+    sendError(request, 409, "Maintenance active");
   } else {
     sendError(request, 500, "Failed to set min heart rate");
   }
@@ -1381,12 +1383,14 @@ void ApiActions::handleHeartRateSetMax(AsyncWebServerRequest* request) {
   }
   
   uint16_t maxValue = static_cast<uint16_t>(value);
-  if (g_heartRateSettings->setMax(maxValue)) {
+  uint16_t newMin;
+  uint16_t newMax;
+  if (g_heartRateSettings->requestMax(maxValue, newMin, newMax)) {
     char json[128];
-    snprintf(json, sizeof(json), "{\"min\":%u,\"max\":%u}", 
-             g_heartRateSettings->getMin(), 
-             g_heartRateSettings->getMax());
+    snprintf(json, sizeof(json), "{\"min\":%u,\"max\":%u}", newMin, newMax);
     sendJSON(request, 200, json);
+  } else if (MaintenanceMode::admissionClosed()) {
+    sendError(request, 409, "Maintenance active");
   } else {
     sendError(request, 500, "Failed to set max heart rate");
   }

@@ -163,7 +163,7 @@ void WebSocketTelemetry::loopFlush() {
   if (clientCount == 0) {
     // Clear any pending dirty flags to prevent burst on next connect
     // (they will be re-marked by the connect handler anyway)
-    dirtyFlags = 0;
+    dirtyFlags.store(0);
     stagedConnectPhase = 0;  // Reset staged connect
     lastSnapshotTime = millis();
     lastHeavySnapshotTime = lastSnapshotTime;
@@ -251,7 +251,7 @@ void WebSocketTelemetry::loopFlush() {
     const uint32_t freeHeap = ESP.getFreeHeap();
     const uint32_t largestBlock = ESP.getMaxAllocHeap();
     const uint8_t clientCount = wsSocket->count();
-    const uint16_t dirtyNow = dirtyFlags;
+    const uint16_t dirtyNow = dirtyFlags.load();
     const uint16_t builtMask = diagBuiltMask60s;
     
     HW_DEBUG_PRINTF("[TelDiag] 60s: dirty=0x%04X built=0x%04X clients=%u free=%u largest=%u\n",
@@ -291,9 +291,10 @@ void WebSocketTelemetry::loopFlush() {
 #endif
   
   // Send all dirty frames
-  if (dirtyFlags != 0) {
+  const uint16_t dirty = dirtyFlags.exchange(0);
+  if (dirty != 0) {
 #if HW_ENABLE_TELEMETRY_DIAG && HW_ENABLE_DEBUG_LOGS
-    const uint16_t dirtyBefore = dirtyFlags;
+    const uint16_t dirtyBefore = dirty;
     diagBuiltMaskLastFlush = 0;
     
     // Per-flush signal (only when we actually flush)
@@ -302,7 +303,7 @@ void WebSocketTelemetry::loopFlush() {
 #endif
     // Iterate through frame types and send dirty ones
     for (uint8_t i = 0; i < 16; i++) {
-      if (dirtyFlags & (1 << i)) {
+      if (dirty & (1 << i)) {
         TelemetryFrameType frameType = static_cast<TelemetryFrameType>(i + 1);
         emitFrame(frameType);
 #if HW_ENABLE_TELEMETRY_DIAG && HW_ENABLE_DEBUG_LOGS
@@ -311,9 +312,6 @@ void WebSocketTelemetry::loopFlush() {
 #endif
       }
     }
-    
-    // Clear dirty flags after sending
-    dirtyFlags = 0;
 
 #if HW_ENABLE_TELEMETRY_DIAG && HW_ENABLE_DEBUG_LOGS
     diagBuiltMask60s |= diagBuiltMaskLastFlush;
@@ -331,7 +329,7 @@ void WebSocketTelemetry::markDirty(TelemetryFrameType frameType) {
   
   uint8_t frameId = static_cast<uint8_t>(frameType);
   if (frameId >= 1 && frameId <= 11) {
-    dirtyFlags |= (1 << (frameId - 1)); // Frame IDs are 1-11, bitfield uses 0-10
+    dirtyFlags.fetch_or(static_cast<uint16_t>(1U << (frameId - 1))); // Frame IDs are 1-11, bitfield uses 0-10
   }
 }
 

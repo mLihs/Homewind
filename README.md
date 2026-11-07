@@ -47,7 +47,7 @@ Several fans can be controlled at once. Your fan is missing? [Open an issue](../
 
 Bluetooth Low Energy heart rate, power, speed and cadence sensors. ANT+ is not supported.
 
-Homewind remembers a sensor by its Bluetooth address. If a sensor is not found after sleep, wait up to 5 minutes; only then search for it again in the **BLE** section. Some sensors use a random address (for example CAD-BLE cadence sensors) and can change it after deep sleep; Homewind then no longer finds them until they are searched again.
+Homewind remembers a sensor by its Bluetooth address. If a sensor is not found after sleep, wait up to 5 minutes; only then search for it again in the **BLE** section. Some sensors use a random address (for example CAD-BLE cadence sensors) and can change it after deep sleep; Homewind then finds them again by their name and stores the new address. This relies on the exact name: it is safe for names with a serial number like `CAD-BLE0446949`; a sensor with a generic name could be confused with another sensor of the same model nearby.
 
 Garmin Cadence Sensor 2: after 2–3 minutes without movement the sensor ends the connection and then stays silent for up to about 5 minutes, even if the crank turns. A blinking LED shows that the sensor is awake again. Homewind connects again on its own at most about 35 seconds after the sensor is back. Removing the battery skips the pause.
 
@@ -124,10 +124,10 @@ Homewind libraries (by the author):
 
 | Library | Version | Purpose |
 | --- | --- | --- |
-| [BluetoothBikeSensorServer](https://github.com/mLihs/BluetoothBikeSensorServer) | 3.0.0 (required: ≥ 3.0.0, API `BikeSensor.h`) | Relays heart rate, speed/cadence and power from BLE sensors to a local GATT server |
+| [BluetoothBikeSensorServer](https://github.com/mLihs/BluetoothBikeSensorServer) | 3.1.0 (required: ≥ 3.1.0, API `BikeSensor.h`) | Relays heart rate, speed/cadence and power from BLE sensors to a local GATT server |
 | [SmartMiFanAsync](https://github.com/mLihs/SmartMiFanAsync) | 2.0.0 (required: ≥ 2.0.0) | Non-blocking Xiaomi / Smartmi fan control over miIO |
 | [GitFirmwareUpdate](https://github.com/mLihs/GitFirmwareUpdate) | 1.0.4 | OTA firmware updates |
-| [wifiMangerLite](https://github.com/mLihs/wifiMangerLite) | 3.0.0 | Wi-Fi setup via captive portal, NVS storage |
+| [wifiMangerLite](https://github.com/mLihs/wifiMangerLite) | 3.1.0 (required: ≥ 3.1.0) | Wi-Fi setup via captive portal, NVS storage |
 | [NVSUtilityLibrary](https://github.com/mLihs/NVSUtilityLibrary) | 1.0.1 | NVS settings storage (JSON) |
 | [HomeWindWSAmoled](https://github.com/mLihs/HomeWindWSAmoled) | 1.5.10 | AMOLED display UI with LVGL (Touch only) |
 | DebugLog | 1.1.0 | Logging |

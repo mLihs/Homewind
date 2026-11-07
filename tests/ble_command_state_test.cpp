@@ -158,6 +158,52 @@ static void testAddrTypeChangeReapplies() {
   CHECK(lib.adds == adds + 1);
 }
 
+static void testAdoptApplied() {
+  static const char* kNewMac = "f2:23:97:c6:37:12";
+  BleReconciler r;
+  FakeLibrary lib;
+  CHECK(!r.adoptApplied(kBleTypeCSC, kNewMac, 1));          // not added
+  r.setTarget(kBleTypeCSC, "CAD", kMacB, 1, true, false);
+  r.run(lib);
+  lib.slotConnected[1] = true;
+  CHECK(!r.adoptApplied(kBleTypeCSC, "bad", 1));
+  CHECK(r.adoptApplied(kBleTypeCSC, kNewMac, 1));
+  CHECK(!r.pending());
+  // The NVS restore of the new address is the applied identity: no re-add.
+  const int adds = lib.adds, removes = lib.removes;
+  r.setTarget(kBleTypeCSC, "CAD", "F2:23:97:C6:37:12", 1, true, false);
+  lib.slotConnected[1] = false;
+  r.run(lib);
+  CHECK(lib.adds == adds && lib.removes == removes && !r.pending());
+  // A pending different target is kept.
+  lib.slotConnected[1] = true;
+  r.setTarget(kBleTypeCSC, "CSC2", kMacA, 0, true, false);
+  r.run(lib);
+  CHECK(r.pending());
+  CHECK(!r.adoptApplied(kBleTypeCSC, kMacB, 1));
+  lib.slotConnected[1] = false;
+  r.run(lib);
+  CHECK(!r.pending() && strcmp(lib.slotMac[1], kMacA) == 0);
+}
+
+static void testAdoptRetriesOtherDuplicate() {
+  static const char* kNewMac = "f2:23:97:c6:37:12";
+  BleReconciler r;
+  FakeLibrary lib;
+  r.setTarget(kBleTypeCSC, "CAD", kMacB, 1, true, false);
+  r.run(lib);
+  r.setTarget(kBleTypeHR, "HR", kMacB, 1, true, false);
+  r.run(lib);
+  CHECK(r.duplicate(kBleTypeHR) && !r.pending());
+  // The library followed CSC to a new address: HR is retried and gets the old one.
+  strcpy(lib.slotMac[1], kNewMac);
+  CHECK(r.adoptApplied(kBleTypeCSC, kNewMac, 1));
+  CHECK(r.pending());
+  r.run(lib);
+  CHECK(r.added(kBleTypeHR) && !r.duplicate(kBleTypeHR) && !r.pending());
+  CHECK(r.added(kBleTypeCSC) && strcmp(lib.slotMac[1], kNewMac) == 0);
+}
+
 static void testCommandQueue() {
   BleCommandQueue q;
   BleCommand c = {};
@@ -235,6 +281,8 @@ int main() {
   testRetryAfterOtherChangedMac();
   testApplyOnDisconnectAndForce();
   testAddrTypeChangeReapplies();
+  testAdoptApplied();
+  testAdoptRetriesOtherDuplicate();
   testCommandQueue();
   testDiscoveryQueue();
   if (g_failures) {

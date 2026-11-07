@@ -5,6 +5,49 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.2] - 2026-11-06
+
+### Fixed
+
+- **Sensors with a random Bluetooth address lost after deep sleep:** a sensor with a random address (e.g. Garmin Cadence Sensor 2, `CAD-BLE…`) can wake up with a new address; 1.6.0/1.6.1 then never found it again until it was searched again. Homewind now adds every sensor with a name whose stored address type is not public (random, or −1 = unknown, which the library resolves from the MAC) with the BikeSensor 3.1 name fallback: while the sensor is not found under its stored address, a scan report with exactly the stored name (and, if it lists services, the sensor's service) from another address is accepted; meanwhile the sleep scans run without the duplicate filter, so a name sent only in the scan response is seen. On `SENSOR_CONNECTED` the loop reads the address from `BikeSensor::info()`; if MAC or address type differ from the stored entry, the sensor entry and `ble_data` NVS are updated (not while maintenance admission is closed) and the reconciler takes the new address as applied, so the sensor is neither removed nor reconnected; a sensor of the other type marked duplicate on the old address is retried. Sensors with a public address are unchanged.
+- **Address type −1 rewritten once:** an entry stored with address type −1 (older configurations) is rewritten once with the type the library resolved, on its first connect with 1.6.2 (one NVS write, also for public-address sensors).
+- **Note:** the name fallback trusts the exact name. Sensors whose name carries a serial number (e.g. `CAD-BLE0446949`) are safe; with a generic name another sensor of the same model nearby could be taken over (README).
+
+### Tests
+
+- `tests/ble_command_state_test.cpp`: `BleReconciler::adoptApplied()` (no re-add after the new address is restored, a pending different target is kept, a duplicate of the other type on the old address is retried).
+
+- **Release note (≤ 160 B):** `Sensors with a random address (e.g. Garmin cadence) are found again by name after deep sleep.` (93 B)
+- **Version:** 1.6.2, **Build ID:** `20261106-184655`
+- **Dependency:** BluetoothBikeSensorServer >= 3.1.0 (`addByMac(…, nameFallback)`); otherwise as 1.6.1
+
+---
+
+## [1.6.1] - 2026-11-06
+
+### Fixed
+
+- **WebSocket dirty flags:** `WebSocketTelemetry::dirtyFlags` is now `std::atomic<uint16_t>`. `markDirty()` (web task and loop) sets bits with `fetch_or`; `loopFlush()` takes all bits once with `exchange(0)` and sends exactly that set. A frame marked while a flush was running is no longer lost.
+- **Heart-rate settings written from the loop:** `heartrate/setmin` and `heartrate/setmax` validate and clamp as before and only queue the new range; `loop()` applies it, writes the HR NVS entry and sends `HEART_RATE_SETTINGS`. The 200 reply `{"min":..,"max":..}` is the range `loop()` will apply (computed against a range still queued), so the WebUI shows the same values as before. Min/max are written only on the loop task, where the fan HR adapter and the WebSocket frame read them. Invalid values stay 400; 409 if maintenance admission closed after the gate (during maintenance the gate answers 503 as before). An NVS write failure is logged and the new range stays active until reboot (1.6.0 answered 500 but also kept the new value in RAM).
+- **WiFi portal routes respect maintenance (wifiMangerLite 3.1.0):** In 1.6.0, `/wml/reset` and `/wml/factoryreset` only queued the reset; the portal's `loop()` (called from the app loop) ran it 500 ms later (`/wml/reset`: clear the WiFi credentials and switch to AP mode; `/wml/factoryreset`: clear them and restart). `/wml/submit` saved the WiFi config on the web task and restarted. None of them checked maintenance (the 1.6.0 known issue said all of them clear storage from the web task). Homewind now registers `CaptivePortal::onActionAllowed()` returning false while maintenance is active (`MaintenanceMode::isActive()`): the three routes reply 409 `{"success":false,"error":"not_allowed"}` and change nothing, and a reset queued just before maintenance started is dropped before it runs. Outside maintenance `/wml/submit` still saves on the web task.
+- **Heart-rate range lost after reboot (also in 1.6.0 and earlier):** the WebUI and `setmin` allow min = max − 10, but loading from NVS required a gap of at least 11, so such a range fell back to 80/160 on the next boot. With min 190, `setmax` also returned max 201 (above the 200 limit). A gap of exactly 10 is now valid everywhere (load check and the `setmax` lower bound min + 10); a range saved by 1.6.0 with a gap of 10 loads again.
+
+### Changed
+
+- `HeartRateSettings::setMin`/`setMax` (wrote NVS on the calling task) are replaced by `requestMin`/`requestMax` (any task, queue only) and `HeartRateSettings::loop()` (loop task, after the fan loop).
+
+### Known issues (planned for 1.6.x)
+
+- A heart-rate change queued in the same loop pass in which maintenance starts is discarded although HTTP answered 200 (same as for fans, see 1.6.0).
+- An allowed `/wml/factoryreset` or `/wml/submit` restarts the device 300–600 ms later; an OTA admitted in that window may start and is cut off by the restart (the old firmware keeps running). A Homewind factory reset admitted while `/wml/submit` is saving can see the WiFi config written again after the erase.
+- Still open from 1.6.0: random Bluetooth address sensors, fan change discarded when maintenance starts in the same pass, Garmin Cadence Sensor 2 idle silence.
+
+- **Release note (≤ 160 B):** `Heart-rate limits are kept after a reboot. WiFi portal reset is blocked during updates. More reliable live updates in the web UI.` (129 B)
+- **Version:** 1.6.1, **Build ID:** `20261106-100002`
+- **Dependency:** wifiMangerLite >= 3.1.0 (`onActionAllowed`); otherwise as 1.6.0
+
+---
+
 ## [1.6.0] - 2026-11-05
 
 ### Changed – BluetoothBikeSensorServer 3.0 (`BikeSensor.h`)

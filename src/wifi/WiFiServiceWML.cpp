@@ -10,6 +10,7 @@
 #include "WiFiServiceWML.h"
 #include "../core/DebugLog.h"
 #include "../core/SystemState.h"
+#include "../core/MaintenanceMode.h"
 #include "../app/BuildInfo.h"
 #include <new>  // For placement-new
 #include <WiFi.h>
@@ -288,6 +289,11 @@ void WiFiServiceWML::setupCallbacks() {
   portal->onWiFiReset([this]() {
     HW_DEBUG_PRINTLN("[WiFiWML] WiFi reset - clearing credentials");
     storage->clear();
+  });
+  
+  // /wml/reset, /wml/factoryreset and /wml/submit: 409 during maintenance (OTA, factory reset)
+  portal->onActionAllowed([]() {
+    return !MaintenanceMode::isActive();
   });
 }
 

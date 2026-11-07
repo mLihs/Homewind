@@ -9,6 +9,7 @@
 #include "HeartRateSettings.h"
 #include "../core/DebugLog.h"
 #include "../core/Crc16.h"
+#include "../core/MaintenanceMode.h"
 
 #if HOMEWIND_ENABLE_WEBSOCKET
 #include "../web/WebSocketTelemetry.h"
@@ -20,6 +21,10 @@ HeartRateSettings::HeartRateSettings()
   : _minHeartRate(DEFAULT_MIN)
   , _maxHeartRate(DEFAULT_MAX)
   , _initialized(false)
+  , _mux(portMUX_INITIALIZER_UNLOCKED)
+  , _pendingValid(false)
+  , _pendingMin(DEFAULT_MIN)
+  , _pendingMax(DEFAULT_MAX)
 {
 }
 
@@ -51,89 +56,92 @@ bool HeartRateSettings::begin() {
   return true;
 }
 
-bool HeartRateSettings::setMin(uint16_t min) {
-  if (!_initialized) {
-    HW_DEBUG_PRINTF("[HeartRateSettings] setMin(%u) failed: not initialized\n", min);
-    return false;
-  }
-  
-  HW_DEBUG_PRINTF("[HeartRateSettings] setMin(%u) called, current min=%u, max=%u\n", 
-                 min, _minHeartRate, _maxHeartRate);
-  
-  // Validate: min must be >= HARD_MIN and < max - MIN_GAP
-  uint16_t maxAllowed = _maxHeartRate - MIN_GAP;
-  HW_DEBUG_PRINTF("[HeartRateSettings] Validating: min must be in [%u, %u) (maxAllowed=%u)\n",
-                 HARD_MIN, maxAllowed, maxAllowed);
-  uint16_t clamped = clamp(min, HARD_MIN, maxAllowed);
-  
-  if (clamped != min) {
-    HW_DEBUG_PRINTF("[HeartRateSettings] Clamped min from %u to %u\n", min, clamped);
-  }
-  
-  _minHeartRate = clamped;
-  
-  if (saveToNVS()) {
-    HW_DEBUG_PRINTF("[HeartRateSettings] Min heart rate set to %u (saved to NVS)\n", _minHeartRate);
-    
-#if HOMEWIND_ENABLE_WEBSOCKET
-    // Notify WebSocket telemetry of change
-    extern WebSocketTelemetry* g_webSocketTelemetry;
-    if (g_webSocketTelemetry) {
-      g_webSocketTelemetry->markDirty(TelemetryFrameType::HEART_RATE_SETTINGS);
-    }
-#endif
-    
-    return true;
-  }
-  
-  HW_ERROR_PRINTLN("[HeartRateSettings] Failed to save min heart rate to NVS");
-  return false;
+void HeartRateSettings::requestBaseLocked(uint16_t& min, uint16_t& max) const {
+  min = _pendingValid ? _pendingMin : _minHeartRate;
+  max = _pendingValid ? _pendingMax : _maxHeartRate;
 }
 
-bool HeartRateSettings::setMax(uint16_t max) {
-  if (!_initialized) {
-    HW_DEBUG_PRINTF("[HeartRateSettings] setMax(%u) failed: not initialized\n", max);
+bool HeartRateSettings::requestMin(uint16_t min, uint16_t& outMin, uint16_t& outMax) {
+  if (!_initialized || MaintenanceMode::admissionClosed()) {
     return false;
   }
   
-  HW_DEBUG_PRINTF("[HeartRateSettings] setMax(%u) called, current min=%u, max=%u\n", 
-                 max, _minHeartRate, _maxHeartRate);
+  portENTER_CRITICAL(&_mux);
+  uint16_t baseMin;
+  uint16_t baseMax;
+  requestBaseLocked(baseMin, baseMax);
+  // min must be >= HARD_MIN and <= max - MIN_GAP
+  _pendingMin = clamp(min, HARD_MIN, baseMax - MIN_GAP);
+  _pendingMax = baseMax;
+  _pendingValid = true;
+  outMin = _pendingMin;
+  outMax = _pendingMax;
+  portEXIT_CRITICAL(&_mux);
   
-  // Validate: max must be <= HARD_MAX and > min + MIN_GAP
-  uint16_t minAllowed = _minHeartRate + MIN_GAP;
-  HW_DEBUG_PRINTF("[HeartRateSettings] Validating: max must be in (%u, %u] (minAllowed=%u, must be > %u)\n",
-                 minAllowed, HARD_MAX, minAllowed, minAllowed);
-  
-  // Check if max can be valid (must be > min + MIN_GAP, so at least min + MIN_GAP + 1)
-  if (max <= minAllowed) {
-    HW_DEBUG_PRINTF("[HeartRateSettings] setMax(%u) rejected: must be > %u (min %u + MIN_GAP %u)\n",
-                   max, minAllowed, _minHeartRate, MIN_GAP);
+  HW_DEBUG_PRINTF("[HeartRateSettings] Min %u queued: min=%u, max=%u\n", min, outMin, outMax);
+  return true;
+}
+
+bool HeartRateSettings::requestMax(uint16_t max, uint16_t& outMin, uint16_t& outMax) {
+  if (!_initialized || MaintenanceMode::admissionClosed()) {
+    return false;
   }
   
-  uint16_t clamped = clamp(max, minAllowed + 1, HARD_MAX);  // +1 because must be > minAllowed
+  portENTER_CRITICAL(&_mux);
+  uint16_t baseMin;
+  uint16_t baseMax;
+  requestBaseLocked(baseMin, baseMax);
+  // max must be >= min + MIN_GAP and <= HARD_MAX
+  _pendingMin = baseMin;
+  _pendingMax = clamp(max, baseMin + MIN_GAP, HARD_MAX);
+  _pendingValid = true;
+  outMin = _pendingMin;
+  outMax = _pendingMax;
+  portEXIT_CRITICAL(&_mux);
   
-  if (clamped != max) {
-    HW_DEBUG_PRINTF("[HeartRateSettings] Clamped max from %u to %u\n", max, clamped);
+  HW_DEBUG_PRINTF("[HeartRateSettings] Max %u queued: min=%u, max=%u\n", max, outMin, outMax);
+  return true;
+}
+
+void HeartRateSettings::loop() {
+  if (!_initialized) {
+    return;
   }
   
-  _maxHeartRate = clamped;
+  // Take and apply in one section: a request in between would otherwise base
+  // on the old range and overwrite this change.
+  // From maintenance REQUESTED on, NVS stays untouched (a factory reset erases it).
+  portENTER_CRITICAL(&_mux);
+  const bool have = _pendingValid;
+  const uint16_t min = _pendingMin;
+  const uint16_t max = _pendingMax;
+  _pendingValid = false;
+  const bool apply = have && !MaintenanceMode::admissionClosed();
+  if (apply) {
+    _minHeartRate = min;
+    _maxHeartRate = max;
+  }
+  portEXIT_CRITICAL(&_mux);
+  if (!have) {
+    return;
+  }
+  if (!apply) {
+    HW_DEBUG_PRINTLN("[HeartRateSettings] Queued change discarded (maintenance)");
+    return;
+  }
   
   if (saveToNVS()) {
-    HW_DEBUG_PRINTF("[HeartRateSettings] Max heart rate set to %u (saved to NVS)\n", _maxHeartRate);
-    
-#if HOMEWIND_ENABLE_WEBSOCKET
-    // Notify WebSocket telemetry of change
-    extern WebSocketTelemetry* g_webSocketTelemetry;
-    if (g_webSocketTelemetry) {
-      g_webSocketTelemetry->markDirty(TelemetryFrameType::HEART_RATE_SETTINGS);
-    }
-#endif
-    
-    return true;
+    HW_DEBUG_PRINTF("[HeartRateSettings] Range applied: min=%u, max=%u (saved to NVS)\n", min, max);
+  } else {
+    HW_ERROR_PRINTLN("[HeartRateSettings] Failed to save heart rate range to NVS");
   }
   
-  HW_ERROR_PRINTLN("[HeartRateSettings] Failed to save max heart rate to NVS");
-  return false;
+#if HOMEWIND_ENABLE_WEBSOCKET
+  extern WebSocketTelemetry* g_webSocketTelemetry;
+  if (g_webSocketTelemetry) {
+    g_webSocketTelemetry->markDirty(TelemetryFrameType::HEART_RATE_SETTINGS);
+  }
+#endif
 }
 
 bool HeartRateSettings::setRange(uint16_t min, uint16_t max) {
@@ -259,7 +267,7 @@ bool HeartRateSettings::validateRange(uint16_t min, uint16_t max) const {
   }
   
   // Check gap requirement
-  if (max <= min + MIN_GAP) {
+  if (max < min + MIN_GAP) {
     return false;
   }
   

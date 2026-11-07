@@ -36,32 +36,38 @@ public:
   bool begin();
   
   /**
-   * Get minimum heart rate
+   * Get minimum heart rate (loop task; the only writer is loop())
    * @return Min heart rate value (default: 80)
    */
   uint16_t getMin() const { return _minHeartRate; }
   
   /**
-   * Get maximum heart rate
+   * Get maximum heart rate (loop task; the only writer is loop())
    * @return Max heart rate value (default: 160)
    */
   uint16_t getMax() const { return _maxHeartRate; }
   
   /**
-   * Set minimum heart rate
-   * Validates and saves to NVS
-   * @param min Min heart rate (50-200, must be < max - 10)
-   * @return true on success
+   * Queue a new minimum heart rate (any task). Clamped to [50, max - 10]
+   * against the range loop() will hold after earlier queued requests.
+   * @param outMin, outMax Range loop() will apply
+   * @return false if not initialized or maintenance admission is closed
    */
-  bool setMin(uint16_t min);
+  bool requestMin(uint16_t min, uint16_t& outMin, uint16_t& outMax);
   
   /**
-   * Set maximum heart rate
-   * Validates and saves to NVS
-   * @param max Max heart rate (50-200, must be > min + 10)
-   * @return true on success
+   * Queue a new maximum heart rate (any task). Clamped to [min + 10, 200]
+   * against the range loop() will hold after earlier queued requests.
+   * @param outMin, outMax Range loop() will apply
+   * @return false if not initialized or maintenance admission is closed
    */
-  bool setMax(uint16_t max);
+  bool requestMax(uint16_t max, uint16_t& outMin, uint16_t& outMax);
+  
+  /**
+   * Loop task: apply the queued range, save to NVS and mark HEART_RATE_SETTINGS dirty.
+   * A request still queued once maintenance admission is closed is discarded.
+   */
+  void loop();
   
   /**
    * Set both min and max heart rate
@@ -128,6 +134,15 @@ private:
   uint16_t _minHeartRate;
   uint16_t _maxHeartRate;
   bool _initialized;
+  
+  // Pending range (any task writes under the mux, loop() applies)
+  portMUX_TYPE _mux;
+  bool _pendingValid;
+  uint16_t _pendingMin;
+  uint16_t _pendingMax;
+  
+  /** Under _mux: base range for a new request (pending if queued, else current). */
+  void requestBaseLocked(uint16_t& min, uint16_t& max) const;
   
   /**
    * Validate min/max range
