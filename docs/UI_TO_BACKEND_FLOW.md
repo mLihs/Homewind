@@ -15,7 +15,7 @@ Diese Seite beschreibt den **Datenfluss vom und zum UI** für die zentralen Funk
 | Sensor trennen | `POST /api/v1/action/sensor/disconnect` | `handleSensorDisconnect` | `name` |
 | Sensor löschen | `POST /api/v1/action/sensor/delete` | `handleSensorDelete` | `name` |
 | Sensoren neu laden | `POST /api/v1/action/sensor/reload` | `handleSensorReload` | — |
-| Discovery starten | `POST /api/v1/action/discovery/start` | `handleDiscoveryStart` | `type` (HR/CSC) |
+| Discovery starten | `POST /api/v1/action/discovery/start` | `handleDiscoveryStart` | `type` (HR/CSC/PWR) |
 | Discovery stoppen | `POST /api/v1/action/discovery/stop` | `handleDiscoveryStop` | — |
 
 **Hinweis:** Nach der Auswahl aus der Discovery-Liste ruft die UI `sensor/set` mit `generation` und `index` auf. Die Handler stellen die Befehle nur in eine Queue; `BLERelayManager::loop()` löst Name, Typ, MAC und Adresstyp aus dem Discovery-Snapshot auf (veraltete Generation → 409).

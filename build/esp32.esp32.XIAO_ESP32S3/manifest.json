@@ -1,6 +1,6 @@
 {
   "name": "Homewind Basic",
-  "version": "1.6.2",
+  "version": "1.7.0",
   "new_install_prompt_erase": true,
   "builds": [
     {

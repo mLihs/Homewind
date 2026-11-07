@@ -107,7 +107,7 @@ Homewind follows a **modular, layered architecture** with clear boundaries and o
 - Needs SmartMiFanAsync integration
 
 **BLERelayManager** (`BLERelayManager.h/cpp`) ✅ **Implemented**
-- BLE sensor relay management (HR, CSC sensors)
+- BLE sensor relay management (HR, CSC, power sensors)
 - Integrated with BluetoothBikeSensorServer library
 - Persistent configuration via NVSConfigBus
 - WebSocket telemetry integration

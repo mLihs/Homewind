@@ -45,7 +45,9 @@ Several fans can be controlled at once. Your fan is missing? [Open an issue](../
 
 ### Sensors
 
-Bluetooth Low Energy heart rate, power, speed and cadence sensors. ANT+ is not supported.
+Bluetooth Low Energy heart rate, power, speed and cadence sensors. ANT+ is not supported. One sensor per type (heart rate, cadence, power) can be connected at the same time; the web UI dashboard and the Touch display show power and cadence. Cadence comes from the cadence sensor while it is connected, otherwise from the power meter (for example while the cadence sensor is asleep or out of range). With both set up, Zwift or Rouvy get one cadence: the cadence sensor's while it is connected, else the power meter's. With a cadence sensor set up, pair cadence in the app to Homewind's cadence (speed/cadence) sensor; Homewind's power data carries cadence only while the cadence sensor is not connected. A trainer that sends power and cadence: add it as **Power** only; cadence then comes from it while no cadence sensor is connected. Added as cadence sensor, it cannot also be added as power meter (same Bluetooth address). The fan follows heart rate only.
+
+Zwift and Rouvy see Homewind only for the sensor types you have set up (with none set up: heart rate and speed/cadence). After adding or removing a sensor type, let the app search for devices again.
 
 Homewind remembers a sensor by its Bluetooth address. If a sensor is not found after sleep, wait up to 5 minutes; only then search for it again in the **BLE** section. Some sensors use a random address (for example CAD-BLE cadence sensors) and can change it after deep sleep; Homewind then finds them again by their name and stores the new address. This relies on the exact name: it is safe for names with a serial number like `CAD-BLE0446949`; a sensor with a generic name could be confused with another sensor of the same model nearby.
 
@@ -108,7 +110,7 @@ esp32:esp32:waveshare_esp32_s3_touch_amoled_164:UploadSpeed=921600,USBMode=hwcdc
 | Upload Speed | 921600 |
 | Arduino Runs On / Events Run On | Core 1 |
 
-Set `HW_ENABLE_DISPLAY=0` for Basic builds in the Arduino IDE. `tools/build.sh` sets it automatically.
+`tools/build.sh` sets `HW_ENABLE_DISPLAY=0` for Basic builds (the Arduino IDE cannot build Homewind, see below).
 
 FQBN:
 
@@ -124,12 +126,12 @@ Homewind libraries (by the author):
 
 | Library | Version | Purpose |
 | --- | --- | --- |
-| [BluetoothBikeSensorServer](https://github.com/mLihs/BluetoothBikeSensorServer) | 3.1.0 (required: ≥ 3.1.0, API `BikeSensor.h`) | Relays heart rate, speed/cadence and power from BLE sensors to a local GATT server |
+| [BluetoothBikeSensorServer](https://github.com/mLihs/BluetoothBikeSensorServer) | 3.2.1 (required: ≥ 3.2.1, API `BikeSensor.h`) | Relays heart rate, speed/cadence and power from BLE sensors to a local GATT server |
 | [SmartMiFanAsync](https://github.com/mLihs/SmartMiFanAsync) | 2.0.0 (required: ≥ 2.0.0) | Non-blocking Xiaomi / Smartmi fan control over miIO |
 | [GitFirmwareUpdate](https://github.com/mLihs/GitFirmwareUpdate) | 1.0.4 | OTA firmware updates |
 | [wifiMangerLite](https://github.com/mLihs/wifiMangerLite) | 3.1.0 (required: ≥ 3.1.0) | Wi-Fi setup via captive portal, NVS storage |
 | [NVSUtilityLibrary](https://github.com/mLihs/NVSUtilityLibrary) | 1.0.1 | NVS settings storage (JSON) |
-| [HomeWindWSAmoled](https://github.com/mLihs/HomeWindWSAmoled) | 1.5.10 | AMOLED display UI with LVGL (Touch only) |
+| [HomeWindWSAmoled](https://github.com/mLihs/HomeWindWSAmoled) | 1.6.0 | AMOLED display UI with LVGL (Touch only) |
 | DebugLog | 1.1.0 | Logging |
 
 Third-party libraries (Library Manager):
@@ -156,9 +158,9 @@ The included `lv_conf.h` already has the required settings: `LV_MEM_CUSTOM 1` wi
 
 ### 4. Build and flash
 
-**Option A – Arduino IDE:** open `Homewind.ino`, select board and port, check the settings above, then Sketch → Upload. The IDE uses the libraries in `~/Documents/Arduino/libraries/`: replace the `NimBLE-Arduino` folder there with the patched workspace copy first, otherwise the build uses the unpatched NimBLE-Arduino and the disconnect crash comes back.
+**Build only with `tools/build.sh`.** Its generated `build_opt.h` sets `-DBBS_MAX_DISCOVERED=15` and `-DBBS_COMPILE_POWER=1`; without them `static_assert`s stop the build, so Sketch → Upload in the Arduino IDE does not compile. The `sdkconfig.h` in the Homewind folder raises the BLE links to 4 (HR, CSC, power + one central); a build that does not pick it up first also stops.
 
-**Option B – terminal, without the Arduino IDE:** `tools/build.sh` builds both variants with the board settings above, checks the result and flashes. It uses `arduino-cli`.
+`tools/build.sh` builds both variants with the board settings above, checks the result and flashes. It uses `arduino-cli`.
 
 Requirements:
 
@@ -166,7 +168,7 @@ Requirements:
 - `python3`
 - These libraries as folders **next to** the Homewind folder (same parent directory): HomeWindWSAmoled, BluetoothBikeSensorServer, NimBLE-Arduino (patched 2.5.2), SmartMiFanAsync, wifiMangerLite, GitFirmwareUpdate, NVSUtilityLibrary, DebugLog. The script compiles these workspace copies and stops if it picks up a copy from `~/Documents/Arduino/libraries/` instead.
 - The other libraries (lvgl, ESP Async WebServer, Async TCP, ArduinoJson) in the Arduino libraries folder, plus `lv_conf.h` as described above.
-- No `build_opt.h` in the Homewind folder; it would override the variant flags.
+- No `build_opt.h` in the Homewind folder: the script passes its own (`build.opt.path`), so one in the sketch folder would be ignored; the script stops if it finds one.
 
 ```
 workspace/

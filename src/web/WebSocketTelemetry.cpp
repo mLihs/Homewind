@@ -42,6 +42,10 @@
  * FIRMWARE_SEARCH_RESULT (0x0A) - Delta:
  *   [has_update:uint8][version_len:uint8][version:bytes][notes_len:uint16][notes:bytes]
  *   Note: version and notes only present if has_update=1
+ * 
+ * BIKE_METRICS (0x0D) - Delta (and once per client on connect):
+ *   [power_w:int16][cadence_rpm:uint16][flags:uint8]   (hw::BikeMetrics, BikeMetrics.h)
+ *   flags: bit0 power valid, bit1 cadence valid, bit2 cadence from power meter
  */
 
 #include "WebSocketTelemetry.h"
@@ -188,7 +192,8 @@ void WebSocketTelemetry::loopFlush() {
       switch (stagedConnectPhase) {
         case 1:
           emitFrameToClient(stagedConnectTargetClientId, TelemetryFrameType::SENSORS_SNAPSHOT);
-          HW_DEBUG_PRINTLN("[WebSocketTelemetry] Staged connect: SENSORS_SNAPSHOT");
+          emitFrameToClient(stagedConnectTargetClientId, TelemetryFrameType::BIKE_METRICS);
+          HW_DEBUG_PRINTLN("[WebSocketTelemetry] Staged connect: SENSORS_SNAPSHOT, BIKE_METRICS");
           break;
         case 2:
           emitFrameToClient(stagedConnectTargetClientId, TelemetryFrameType::FANS_SNAPSHOT);
@@ -213,6 +218,7 @@ void WebSocketTelemetry::loopFlush() {
     if (requested[i] != 0) {
       emitFrameToClient(requested[i], TelemetryFrameType::SENSORS_SNAPSHOT);
       emitFrameToClient(requested[i], TelemetryFrameType::FANS_SNAPSHOT);
+      emitFrameToClient(requested[i], TelemetryFrameType::BIKE_METRICS);
     }
   }
 
@@ -259,7 +265,7 @@ void WebSocketTelemetry::loopFlush() {
     
 #if HW_TELEMETRY_DIAG_PRINT_FRAME_LIST
     if (builtMask != 0) {
-      static const char* kFrameNames[10] = {
+      static const char* kFrameNames[13] = {
         "SYSTEM_STATUS",
         "SENSORS_SNAPSHOT",
         "SENSOR_CONN_STATE",
@@ -270,12 +276,15 @@ void WebSocketTelemetry::loopFlush() {
         "FIRMWARE_VERSION",
         "FIRMWARE_PROGRESS",
         "FIRMWARE_SEARCH_RESULT",
+        "HEART_RATE_SETTINGS",
+        nullptr,  // 0x0C CLIENT_ID: control frame, never marked dirty
+        "BIKE_METRICS",
       };
       
       HW_DEBUG_PRINT("[TelDiag] built: ");
       bool first = true;
-      for (uint8_t i = 0; i < 10; i++) {
-        if (builtMask & (1U << i)) {
+      for (uint8_t i = 0; i < 13; i++) {
+        if ((builtMask & (1U << i)) && kFrameNames[i]) {
           if (!first) HW_DEBUG_PRINT(",");
           HW_DEBUG_PRINT(kFrameNames[i]);
           first = false;
@@ -328,8 +337,9 @@ void WebSocketTelemetry::markDirty(TelemetryFrameType frameType) {
   }
   
   uint8_t frameId = static_cast<uint8_t>(frameType);
-  if (frameId >= 1 && frameId <= 11) {
-    dirtyFlags.fetch_or(static_cast<uint16_t>(1U << (frameId - 1))); // Frame IDs are 1-11, bitfield uses 0-10
+  static_assert(static_cast<uint8_t>(TelemetryFrameType::BIKE_METRICS) <= 16, "dirtyFlags is 16 bits");
+  if (frameId >= 1 && frameId <= static_cast<uint8_t>(TelemetryFrameType::BIKE_METRICS)) {
+    dirtyFlags.fetch_or(static_cast<uint16_t>(1U << (frameId - 1))); // Frame IDs are 1-13, bitfield uses 0-12
   }
 }
 
@@ -526,6 +536,9 @@ void WebSocketTelemetry::emitFrameToClient(uint32_t clientId, TelemetryFrameType
     case TelemetryFrameType::HEART_RATE_SETTINGS:
       payloadLen = buildHeartRateSettings(frameBuffer + 1, MAX_FRAME_SIZE - 1);
       break;
+    case TelemetryFrameType::BIKE_METRICS:
+      payloadLen = buildBikeMetrics(frameBuffer + 1, MAX_FRAME_SIZE - 1);
+      break;
     default:
       payloadLen = 0;
       break;
@@ -582,6 +595,9 @@ void WebSocketTelemetry::emitFrame(TelemetryFrameType frameType) {
     case TelemetryFrameType::HEART_RATE_SETTINGS:
       payloadLen = buildHeartRateSettings(frameBuffer + 1, MAX_FRAME_SIZE - 1);
       break;
+    case TelemetryFrameType::BIKE_METRICS:
+      payloadLen = buildBikeMetrics(frameBuffer + 1, MAX_FRAME_SIZE - 1);
+      break;
     default:
       return; // Unknown frame type
   }
@@ -626,21 +642,23 @@ size_t WebSocketTelemetry::buildSensorsSnapshot(uint8_t* buffer, size_t bufferSi
   }
   
 #if HW_ENABLE_BLE
+  static_assert(1 + BLERelayManager::MAX_SENSORS * (84 + 1) <= MAX_FRAME_SIZE - 1,
+                "every configured sensor must fit into one SENSORS_SNAPSHOT frame");
   if (!g_bleRelayManager || !g_bleRelayManager->ready()) {
     // Return empty snapshot if BLE not available
     return writeUint8(buffer, 0, 0);
   }
   
   // Get sensors from BLERelayManager
-  HwSensorInfo sensors[2];  // Max 2 sensors (HR, CSC)
-  uint8_t count = g_bleRelayManager->getConfiguredSensors(sensors, 2);
+  HwSensorInfo sensors[BLERelayManager::MAX_SENSORS];
+  uint8_t count = g_bleRelayManager->getConfiguredSensors(sensors, BLERelayManager::MAX_SENSORS);
   
   size_t offset = 0;
   offset = writeUint8(buffer, offset, count);
   uint8_t written = 0;
   
   // Write each sensor (fixed 84 bytes per sensor)
-  for (uint8_t i = 0; i < count && i < 2; i++) {
+  for (uint8_t i = 0; i < count; i++) {
     const HwSensorInfo& s = sensors[i];
     
     // Check buffer space
@@ -658,10 +676,11 @@ size_t WebSocketTelemetry::buildSensorsSnapshot(uint8_t* buffer, size_t bufferSi
     }
     offset += 64;
     
-    // Write type (1 byte: 0=HR, 1=CSC)
+    // Write type (1 byte: 0=HR, 1=CSC, 2=PWR)
     uint8_t typeByte = 0;
     if (strcmp(s.type, "HR") == 0) typeByte = 0;
     else if (strcmp(s.type, "CSC") == 0) typeByte = 1;
+    else if (strcmp(s.type, "PWR") == 0) typeByte = 2;
     buffer[offset++] = typeByte;
     
     // Write MAC (fixed 17 bytes, null-terminated, null-padded)
@@ -807,8 +826,8 @@ size_t WebSocketTelemetry::buildSensorConnState(uint8_t* buffer, size_t bufferSi
   }
   
   // Get first sensor (or we could track the last changed sensor)
-  HwSensorInfo sensors[2];  // MAX_SENSORS (HR, CSC)
-  uint8_t count = g_bleRelayManager->getConfiguredSensors(sensors, 2);
+  HwSensorInfo sensors[BLERelayManager::MAX_SENSORS];
+  uint8_t count = g_bleRelayManager->getConfiguredSensors(sensors, BLERelayManager::MAX_SENSORS);
   
   if (count == 0) {
     return 0;  // No sensors to report
@@ -860,7 +879,7 @@ size_t WebSocketTelemetry::buildHeartRate(uint8_t* buffer, size_t bufferSize) {
 
 size_t WebSocketTelemetry::buildDiscoveryStatus(uint8_t* buffer, size_t bufferSize) {
   // Format: [active:uint8][type:uint8][error:uint8]
-  // type: 0=HR, 1=CSC, 255=all/unknown (2=PWR reserved, not used in Homewind)
+  // type: 0=HR, 1=CSC, 2=PWR, 255=all/unknown (Homewind always sends 255)
   // error (appended in 1.6.0): 0=none, 1=busy (start refused while a discovery was open)
   
   if (bufferSize < 3) {
@@ -1118,6 +1137,21 @@ size_t WebSocketTelemetry::buildHeartRateSettings(uint8_t* buffer, size_t buffer
 #else
   return 0;
 #endif
+}
+
+size_t WebSocketTelemetry::buildBikeMetrics(uint8_t* buffer, size_t bufferSize) {
+  // Format: [power_w:int16][cadence_rpm:uint16][flags:uint8], invalid values are 0
+#if HW_ENABLE_BLE
+  static_assert(1 + hw::kBikeMetricsPayloadLen <= MAX_FRAME_SIZE, "BIKE_METRICS must fit into one frame");
+  // Latched by BLERelayManager::loop() (same task)
+  if (g_bleRelayManager && g_bleRelayManager->ready()) {
+    return hw::encodeBikeMetrics(g_bleRelayManager->bikeMetrics(), buffer, bufferSize);
+  }
+#else
+  (void)buffer;
+  (void)bufferSize;
+#endif
+  return 0;
 }
 
 void WebSocketTelemetry::sendFullSnapshot() {

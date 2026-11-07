@@ -20,9 +20,10 @@
     FIRMWARE_SEARCH_RESULT: 0x0A,
     HEART_RATE_SETTINGS: 0x0B,
     CLIENT_ID: 0x0C, // Control: [0x0C][clientId:uint32 LE]
+    BIKE_METRICS: 0x0D,
   };
 
-  const SENSOR_TYPE_REV = { 0: "HR", 1: "CSC" };
+  const SENSOR_TYPE_REV = { 0: "HR", 1: "CSC", 2: "PWR" };
 
   // Timing constants (global for use across modules)
   window.TIMING = window.TIMING || {
@@ -163,6 +164,17 @@
 
     // Update HR widget based on sensor state
     updateHrWidgetFromSensors(list);
+    // Power & cadence tile: only with a cadence or power sensor
+    const bikeCard = $("bike-card");
+    if (bikeCard) bikeCard.hidden = !list.some((x) => x.type === "CSC" || x.type === "PWR");
+  }
+
+  // BIKE_METRICS flags: bit0 power valid, bit1 cadence valid, bit2 cadence from power meter
+  function applyBikeMetrics(watts, rpm, flags) {
+    const p = $("bike-power"), c = $("bike-cadence"), hint = $("bike-cadence-hint");
+    if (p) p.textContent = (flags & 1) ? String(watts) : "–";
+    if (c) c.textContent = (flags & 2) ? String(rpm) : "–";
+    if (hint) hint.hidden = !(flags & 4);
   }
   
   function updateHrWidgetFromSensors(sensorList) {
@@ -296,6 +308,13 @@
         return;
       }
 
+      case FRAME.BIKE_METRICS: {
+        // [power_w:int16][cadence_rpm:uint16][flags:uint8]
+        if (u8.length < off + 5) return;
+        applyBikeMetrics(dv.getInt16(off, true), u16(dv, off + 2), u8[off + 4]);
+        return;
+      }
+
       case FRAME.HEART_RATE_SETTINGS: {
         if (u8.length < off + 4) return;
         const min = u16(dv, off);
@@ -371,7 +390,7 @@
           list.push({
             id: name,
             name: name,
-            type: SENSOR_TYPE_REV[t] || "HR",
+            type: SENSOR_TYPE_REV[t],
             mac: mac,
             connected,
             battery: (batteryRaw === 255) ? null : batteryRaw,
@@ -382,7 +401,8 @@
         if (off + list.length <= u8.length) {
           list.forEach((s, i) => { s.duplicate = u8[off + i] === 1; });
         }
-        applySensorsSnapshot(list);
+        // Unknown type byte (newer firmware): skip the record
+        applySensorsSnapshot(list.filter((s) => s.type));
         return;
       }
 
@@ -4619,7 +4639,7 @@ window.startRebootMonitoring = function (options) {
   }
 
 /**
- * BLESensorManager - BLE bike sensor setup state machine (HR, CSC)
+ * BLESensorManager - BLE bike sensor setup state machine (HR, CSC, PWR)
  * Arduino: loadConnectedSensors(), getSensorConnectionState(), deleteConfiguredSensor(), startDiscovery(), setConfiguredSensor()
  * Callback: window.onSensorDiscoveryResult(sensors[])
  */
@@ -4627,7 +4647,7 @@ window.startRebootMonitoring = function (options) {
 const BLESensorManager = (function () {
   const STATE = { SENSOR_OVERVIEW: "sensor_overview", DISCOVER_SENSORS: "discover_sensors", SELECT_SENSOR: "select_sensor", ERROR: "error" };
   
-  const DEFAULT_SENSOR_TYPES = ["HR", "CSC"];
+  const DEFAULT_SENSOR_TYPES = ["HR", "CSC", "PWR"];
 
   if (typeof window.DEFAULT_SENSOR_TYPES === "undefined") window.DEFAULT_SENSOR_TYPES = DEFAULT_SENSOR_TYPES;
 
@@ -4657,7 +4677,8 @@ const BLESensorManager = (function () {
   }
 
   // Use centralized escapeHtml utility (window.escapeHtml)
-  const getSensorTypeLabel = (type) => ({ HR: "Heart Rate", CSC: "Cadence" }[type] || type);
+  const getSensorTypeLabel = (type) => ({ HR: "Heart Rate", CSC: "Cadence", PWR: "Power" }[type] || type);
+  const SENSOR_ICON_VARS = { HR: "--icon-sensor-hr-svg-data", CSC: "--icon-sensor-csc-svg-data", PWR: "--icon-sensor-pwr-svg-data" };
   const getSensorIconClass = (type, connected) => `sensor-icon-${type.toLowerCase()}${connected ? "" : "-grayscale"}`;
 
   function loadSensorsWithStates() {
@@ -4788,7 +4809,6 @@ const BLESensorManager = (function () {
     currentDiscoveryType = type;
     discoveredSensors = [];
     selectedSensor = null;
-    const iconMap = { HR: "--icon-sensor-hr-svg-data", CSC: "--icon-sensor-csc-svg-data" };
     AppModal.open({ title: "Searching", icon: "--icon-spinner-svg-data", subline: `Searching for ${getSensorTypeLabel(type)} Sensors…`, buttons: [], actions: false });
     const startArduinoDiscovery = async () => {
       if (window.ApiV1 && typeof window.ApiV1.discoveryStart === "function") {
@@ -4823,10 +4843,9 @@ const BLESensorManager = (function () {
     setState(STATE.SELECT_SENSOR);
     isSensorOverviewModalOpen = false; // FIX: Ensure overview flag is false in select state
     let saveButton = null;
-    const iconMap = { HR: "--icon-sensor-hr-svg-data", CSC: "--icon-sensor-csc-svg-data" };
     AppModal.open({
       title: `Found ${getSensorTypeLabel(currentDiscoveryType)} Sensors`,
-      icon: iconMap[currentDiscoveryType] || "--icon-sensor-hr-svg-data",
+      icon: SENSOR_ICON_VARS[currentDiscoveryType] || "--icon-sensor-hr-svg-data",
       subline: `Select your preferred ${getSensorTypeLabel(currentDiscoveryType)} Sensor`,
       content: renderSelectContent(),
       buttons: [

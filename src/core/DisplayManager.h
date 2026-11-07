@@ -15,6 +15,7 @@
 
 #include <atomic>
 #include <HomeWindWSAmoled.h>
+#include "BikeMetrics.h"
 
 class DisplayManager {
 public:
@@ -26,7 +27,9 @@ public:
   void setHeartRate(uint16_t bpm);
   void updateHRState();
 
-  void setCadence(uint16_t rpm);
+  /** Power and cadence of the cadence card: the latched BIKE_METRICS state */
+  void setBikeMetrics(const hw::BikeMetrics& m);
+  /** Cadence card state and name from the configured CSC and PWR sensors */
   void updateCSCState();
 
   void updateFans();
@@ -48,8 +51,13 @@ private:
   bool _initialized;
   uint16_t _lastHR;
   uint16_t _lastCadence;
+  int16_t _lastPower;
+  bool _lastPowerValid;
+  int32_t _shownWatts;  /* last value passed to homewind_set_csc_power() */
 
-  /* Dirty-flags for deferred LVGL updates (written from BLE/Fan/Arduino tasks, read in loop()) */
+  /* Dirty-flags for deferred LVGL updates, read in loop(). Values and HR/CSC
+     state are written in the Arduino loop task (BLERelayManager::loop(), App);
+     only _fansDirty is set from other tasks (web handlers, LVGL fan toggle). */
   std::atomic<bool> _fansDirty;
   std::atomic<bool> _hrValueDirty;
   std::atomic<bool> _cscValueDirty;
@@ -64,6 +72,7 @@ private:
   bool _cscStateConfigured;
   csc_state_t _cachedCSCState;
   char _cachedCSCName[64];
+  bool _cachedShowPower;
 
   /* Cached URL for setUrl */
   char _cachedUrl[64];

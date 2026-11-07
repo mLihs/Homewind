@@ -19,13 +19,46 @@ namespace hw {
 // Same bit values as BikeSensor::SensorType.
 constexpr uint8_t kBleTypeHR = 0x01;
 constexpr uint8_t kBleTypeCSC = 0x02;
-// Slot 0 = HR, slot 1 = CSC: reconcile and NVS restore apply HR first.
-constexpr uint8_t kBleSlots = 2;
+constexpr uint8_t kBleTypePWR = 0x04;
+// Slot 0 = HR, slot 1 = CSC, slot 2 = power: reconcile and NVS restore apply
+// them in this order.
+constexpr uint8_t kBleSlots = 3;
 
 inline int bleSlotOf(uint8_t typeBit) {
-  return typeBit == kBleTypeHR ? 0 : (typeBit == kBleTypeCSC ? 1 : -1);
+  switch (typeBit) {
+    case kBleTypeHR: return 0;
+    case kBleTypeCSC: return 1;
+    case kBleTypePWR: return 2;
+    default: return -1;
+  }
 }
-inline uint8_t bleTypeOfSlot(uint8_t slot) { return slot == 0 ? kBleTypeHR : kBleTypeCSC; }
+inline uint8_t bleTypeOfSlot(uint8_t slot) {
+  return slot == 0 ? kBleTypeHR : (slot == 1 ? kBleTypeCSC : kBleTypePWR);
+}
+
+// Type to store for a discovered sensor advertising several services (e.g. a
+// trainer with CSC and power): the first in slot order that the discovery
+// requested, else the first in slot order. 0: no HR/CSC/PWR in typeMask.
+inline uint8_t bleResolveDiscoveryType(uint8_t typeMask, uint8_t requestedMask) {
+  uint8_t first = 0;
+  for (uint8_t i = 0; i < kBleSlots; ++i) {
+    const uint8_t t = bleTypeOfSlot(i);
+    if (!(typeMask & t)) continue;
+    if (requestedMask & t) return t;
+    if (first == 0) first = t;
+  }
+  return first;
+}
+
+// Relay server UUIDs to advertise: the types added to the library; none
+// added → the configured types (never name only, so an app still finds a
+// known Homewind); none configured → HR + CSC (1.6.x, first Zwift pairing).
+inline uint8_t bleAdvertisedTypes(uint8_t addedMask, uint8_t configuredMask) {
+  const uint8_t all = kBleTypeHR | kBleTypeCSC | kBleTypePWR;
+  if ((addedMask & all) != 0) return addedMask & all;
+  if ((configuredMask & all) != 0) return configuredMask & all;
+  return kBleTypeHR | kBleTypeCSC;
+}
 
 // "xx:xx:xx:xx:xx:xx" (hex, either case) and addrType -1/0/1: the inputs
 // BikeSensor::addByMac() accepts, so a false from it can only mean duplicate.
@@ -152,7 +185,12 @@ public:
     t.dirty = true;
   }
 
-  bool pending() const { return _target[0].dirty || _target[1].dirty; }
+  bool pending() const {
+    for (uint8_t i = 0; i < kBleSlots; ++i) {
+      if (_target[i].dirty) return true;
+    }
+    return false;
+  }
   bool duplicate(uint8_t typeBit) const {
     const int i = bleSlotOf(typeBit);
     return i >= 0 && _dup[i];
@@ -161,9 +199,16 @@ public:
     const int i = bleSlotOf(typeBit);
     return i >= 0 && _applied[i].added;
   }
+  uint8_t addedMask() const {
+    uint8_t mask = 0;
+    for (uint8_t i = 0; i < kBleSlots; ++i) {
+      if (_applied[i].added) mask |= bleTypeOfSlot(i);
+    }
+    return mask;
+  }
 
-  // One pass in slot order (HR before CSC). A duplicate is retried only when
-  // the other slot's applied identity changes.
+  // One pass in slot order (HR, CSC, power). A duplicate is retried only when
+  // another slot's applied identity changes.
   void run(BleLibraryPort& port) {
     for (uint8_t pass = 0; pass < 3; ++pass) {
       _retryFlagged = false;
@@ -175,7 +220,7 @@ public:
   // The library followed the applied sensor to a new address (name fallback):
   // target and applied take it without a re-add. False while the slot is not
   // added or a different target is pending; nothing changes then. A duplicate
-  // in the other slot is retried on the next run().
+  // in another slot is retried on the next run().
   bool adoptApplied(uint8_t typeBit, const char* mac, int8_t addrType) {
     const int i = bleSlotOf(typeBit);
     if (i < 0 || !bleAddressValid(mac, addrType)) return false;
@@ -218,7 +263,7 @@ private:
 
   Target _target[kBleSlots];
   Applied _applied[kBleSlots];
-  bool _dup[kBleSlots] = {false, false};
+  bool _dup[kBleSlots] = {};
   bool _retryFlagged = false;
 
   static void copy(char* dst, const char* src, size_t len) {

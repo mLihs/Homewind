@@ -11,6 +11,7 @@
 #if HOMEWIND_ENABLE_API_ACTIONS
 
 #include <string.h>
+#include <strings.h>
 #include "../core/SystemState.h"
 #include "../core/TextUtil.h"
 #include "../app/BuildInfo.h"
@@ -405,23 +406,9 @@ bool ApiActions::validateFanToken(const String& token) {
 
 bool ApiActions::validateSensorType(const String& type) {
   // Case-insensitive comparison without String allocation
-  // Valid types: "HR", "CSC" (case-insensitive)
-  size_t len = type.length();
+  // Valid types: "HR", "CSC", "PWR" (case-insensitive)
   const char* t = type.c_str();
-  
-  if (len == 2) {
-    // Check for "HR"
-    if ((t[0] == 'h' || t[0] == 'H') && (t[1] == 'r' || t[1] == 'R')) {
-      return true;
-    }
-  } else if (len == 3) {
-    // Check for "CSC"
-    if ((t[0] == 'c' || t[0] == 'C') && (t[1] == 's' || t[1] == 'S') && (t[2] == 'c' || t[2] == 'C')) {
-      return true;
-    }
-  }
-  
-  return false;
+  return strcasecmp(t, "HR") == 0 || strcasecmp(t, "CSC") == 0 || strcasecmp(t, "PWR") == 0;
 }
 
 bool ApiActions::resolveFanToken(String& token) {
@@ -731,10 +718,12 @@ void ApiActions::handleDiscoveryStart(AsyncWebServerRequest* request) {
   }
   
 #if HW_ENABLE_BLE
-  // Empty type = both; "HR" has length 2, "CSC" length 3 (validated above)
-  uint8_t mask = hw::kBleTypeHR | hw::kBleTypeCSC;
+  // Empty type = all; otherwise HR, CSC or PWR (validated above)
+  uint8_t mask = hw::kBleTypeHR | hw::kBleTypeCSC | hw::kBleTypePWR;
   if (type.length() > 0) {
-    mask = (type.length() == 2) ? hw::kBleTypeHR : hw::kBleTypeCSC;
+    if (strcasecmp(type.c_str(), "HR") == 0) mask = hw::kBleTypeHR;
+    else if (strcasecmp(type.c_str(), "CSC") == 0) mask = hw::kBleTypeCSC;
+    else mask = hw::kBleTypePWR;
   }
   // "busy" (discovery already open) is reported in the DISCOVERY_STATUS frame
   sendBleEnqueueResult(request, g_bleRelayManager->requestDiscoveryStart(mask));
@@ -1432,6 +1421,7 @@ void ApiActions::handleTelemetryRefresh(AsyncWebServerRequest* request) {
     const uint32_t clientId = static_cast<uint32_t>(clientIdParam);
     g_webSocketTelemetry->requestSnapshotsForClient(clientId);
   } else {
+    g_webSocketTelemetry->markDirty(TelemetryFrameType::BIKE_METRICS);
     const uint8_t clients = g_webSocketTelemetry->getClientCount();
     if (clients <= 1) {
       g_webSocketTelemetry->markDirty(TelemetryFrameType::SENSORS_SNAPSHOT);

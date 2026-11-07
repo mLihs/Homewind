@@ -9,7 +9,6 @@
 
 #include "BLERelayManager.h"
 #include "../core/DebugLog.h"
-#include "../core/Crc16.h"
 #include "MaintenanceMode.h"
 
 #if HOMEWIND_ENABLE_WEBSOCKET
@@ -28,16 +27,23 @@ extern DisplayManager* g_displayManager;
 
 #include <strings.h>
 
+// HR, CSC, power and one central: the core's sdkconfig.h allows 3 links, the
+// sketch folder's sdkconfig.h raises it and must come first on the include path.
+static_assert(CONFIG_BT_NIMBLE_MAX_CONNECTIONS >= 4, "Homewind/sdkconfig.h (4 BLE links) not in effect");
+
 // Static instance pointer for callbacks
 BLERelayManager* BLERelayManager::_instance = nullptr;
 
 namespace {
 
-constexpr uint8_t kAllTypes = hw::kBleTypeHR | hw::kBleTypeCSC;
+constexpr uint8_t kAllTypes = hw::kBleTypeHR | hw::kBleTypeCSC | hw::kBleTypePWR;
 
 BikeSensor::SensorType toSensorType(uint8_t typeBit) {
-  return typeBit == hw::kBleTypeHR ? BikeSensor::SensorType::HEART_RATE
-                                   : BikeSensor::SensorType::SPEED_CADENCE;
+  switch (typeBit) {
+    case hw::kBleTypeHR: return BikeSensor::SensorType::HEART_RATE;
+    case hw::kBleTypePWR: return BikeSensor::SensorType::POWER;
+    default: return BikeSensor::SensorType::SPEED_CADENCE;
+  }
 }
 
 void copyStr(char* dst, const char* src, size_t len) {
@@ -100,6 +106,7 @@ BLERelayManager::BLERelayManager()
   , _discoveredGeneration(0)
   , _reconcileScheduled(false)
   , _lastReconcileMs(0)
+  , _advertisedMask(kAllTypes)   // must equal the begin() mask: advertised until the first refresh
   , _discoveryStopIssued(false)
   , _maintDiscoveryDone(false)
   , _lastSnapshotMs(0)
@@ -109,8 +116,9 @@ BLERelayManager::BLERelayManager()
   , _hrBpm(0)
   , _hrValid(false)
   , _hrNew(false)
-  , _cadenceRpm(0)
   , _cadenceNew(false)
+  , _powerNew(false)
+  , _bikeMetricsMs(0)
 {
   _instance = this;
   memset(_configuredSensors, 0, sizeof(_configuredSensors));
@@ -142,19 +150,19 @@ bool BLERelayManager::begin() {
     HW_DEBUG_PRINTLN("[BLE] No sensor configuration found, starting fresh");
     _sensorCount = 0;
   }
-
+  
   BikeSensor::setEventCallback(staticOnEvent);
   BikeSensor::setHeartRateCallback(staticOnHeartRate);
   BikeSensor::setCadenceCallback(staticOnCadence);
-
+  BikeSensor::setPowerCallback(staticOnPower);
   if (!BikeSensor::begin("homewind", kAllTypes, BikeSensor::Mode::MAC)) {
     HW_ERROR_PRINTLN("[BLE] BikeSensor::begin() failed");
     return false;
   }
-
+  
   initialized = true;
-
-  // HR before CSC: a MAC saved for both types by 2.x stays with HR.
+  
+  // Slot order HR, CSC, PWR: a MAC saved for several types stays with the first.
   setTargetsFromConfig();
   runReconcile(false);
   refreshSnapshot();
@@ -176,7 +184,7 @@ void BLERelayManager::loop() {
   if (!initialized) {
     return;
   }
-
+  
   BikeSensor::update();
 
   if (_maintenanceStopped) {
@@ -205,13 +213,11 @@ void BLERelayManager::loop() {
     }
 #endif
   }
-  if (_cadenceNew) {
-    _cadenceNew = false;
-#if HW_ENABLE_DISPLAY
-    if (g_displayManager) {
-      g_displayManager->setCadence(_cadenceRpm);
-    }
-#endif
+  const bool cadenceNew = _cadenceNew;
+  _cadenceNew = false;
+  if (_powerNew || cadenceNew || millis() - _bikeMetricsMs >= BIKE_METRICS_POLL_MS) {
+    _powerNew = false;
+    updateBikeMetrics();
   }
 
   // From maintenance REQUESTED on, queues and reconcile are blocked.
@@ -326,9 +332,9 @@ bool BLERelayManager::configuredNameExistsLocked(const char* name) const {
   for (uint8_t i = 0; i < _snapshotCount; i++) {
     if (strcmp(_snapshot[i].name, name) == 0) return true;
   }
-  return false;
-}
-
+    return false;
+  }
+  
 BleEnqueueResult BLERelayManager::enqueueByName(hw::BleCmdKind kind, const char* name) {
   if (!name || name[0] == '\0') {
     return BleEnqueueResult::NOT_FOUND;
@@ -459,13 +465,9 @@ void BLERelayManager::applySetFromDiscovery(uint32_t generation, uint8_t index, 
     return;
   }
 
-  // A sensor advertising both services: the discovery's own type wins, else HR.
-  uint8_t type = rec.typeMask & kAllTypes;
-  if (type == kAllTypes) {
-    type = (requestedMask == hw::kBleTypeCSC) ? hw::kBleTypeCSC : hw::kBleTypeHR;
-  }
-  if (type != hw::kBleTypeHR && type != hw::kBleTypeCSC) {
-    HW_DEBUG_PRINTF("[BLE] setSensor: index %u has no HR/CSC type\n", index);
+  const uint8_t type = hw::bleResolveDiscoveryType(rec.typeMask, requestedMask);
+  if (type == 0) {
+    HW_DEBUG_PRINTF("[BLE] setSensor: index %u has no HR/CSC/PWR type\n", index);
     return;
   }
 
@@ -542,7 +544,7 @@ void BLERelayManager::applyCommand(const hw::BleCommand& cmd) {
       for (uint8_t slot = 0; slot < hw::kBleSlots; slot++) {
         _reconciler.setTarget(hw::bleTypeOfSlot(slot), "", "", -1, false, true);
       }
-      runReconcile(false);
+      runReconcile(false, false);   // the reconcile after setTargetsFromConfig() advertises
       _sensorCount = 0;
       if (!loadConfigFromNVS()) {
         _sensorCount = 0;
@@ -552,6 +554,11 @@ void BLERelayManager::applyCommand(const hw::BleCommand& cmd) {
   }
   refreshSnapshot();
   markSensorsDirty();
+  if (cmd.kind != hw::BleCmdKind::CONNECT && cmd.kind != hw::BleCmdKind::DISCONNECT) {
+    // Configured set may have changed (a sensor that never connects sends no event)
+    notifyDisplay(hw::kBleTypeHR);
+    notifyDisplay(hw::kBleTypeCSC);
+  }
 }
 
 void BLERelayManager::processDiscoveryOps() {
@@ -598,6 +605,8 @@ void BLERelayManager::processEvents() {
     _eventsDropped = false;
     HW_ERROR_PRINTLN("[BLE] Event FIFO overflow, state resynced from the library");
     refreshSnapshot();
+    notifyDisplay(hw::kBleTypeHR);
+    notifyDisplay(hw::kBleTypeCSC);
     if (!BikeSensor::connected(BikeSensor::SensorType::HEART_RATE)) {
       _hrValid = false;
       _hrNew = false;
@@ -731,7 +740,7 @@ void BLERelayManager::adoptSensorAddress(uint8_t typeBit) {
   _reconcileScheduled = true;   // the other slot's duplicate may apply now
 }
 
-void BLERelayManager::runReconcile(bool throttled) {
+void BLERelayManager::runReconcile(bool throttled, bool advertise) {
   const unsigned long now = millis();
   if (throttled && now - _lastReconcileMs < RECONCILE_INTERVAL_MS) {
     return;
@@ -740,8 +749,26 @@ void BLERelayManager::runReconcile(bool throttled) {
   _reconcileScheduled = false;
   LibraryPort port;
   _reconciler.run(port);
+  if (advertise) updateAdvertisedTypes();
   refreshSnapshot();
   if (!_serverPaused) markSensorsDirty();
+}
+
+// While paused, refreshAdvertising() applies the data without restarting
+// advertising; resume() starts it with the new data.
+void BLERelayManager::updateAdvertisedTypes() {
+  if (MaintenanceMode::admissionClosed()) return;
+  uint8_t configured = 0;
+  for (uint8_t i = 0; i < _sensorCount; i++) configured |= _configuredSensors[i].typeBit;
+  const uint8_t mask = hw::bleAdvertisedTypes(_reconciler.addedMask(), configured);
+  if (mask == _advertisedMask) return;
+  BikeSensor::setAdvertisedTypes(mask);
+  if (!BikeSensor::refreshAdvertising()) {
+    HW_ERROR_PRINTF("[BLE] refreshAdvertising(0x%02X) failed, retry at the next reconcile\n", mask);
+    return;
+  }
+  HW_DEBUG_PRINTF("[BLE] Advertised types 0x%02X -> 0x%02X\n", _advertisedMask, mask);
+  _advertisedMask = mask;
 }
 
 void BLERelayManager::refreshSnapshot() {
@@ -774,23 +801,54 @@ void BLERelayManager::refreshSnapshot() {
 
 void BLERelayManager::markSensorsDirty() {
 #if HOMEWIND_ENABLE_WEBSOCKET
-  if (_telemetry) {
-    _telemetry->markDirty(TelemetryFrameType::SENSORS_SNAPSHOT);
-  }
+    if (_telemetry) {
+      _telemetry->markDirty(TelemetryFrameType::SENSORS_SNAPSHOT);
+    }
 #endif
-}
+  }
 
 void BLERelayManager::notifyDisplay(uint8_t typeBit) {
 #if HW_ENABLE_DISPLAY
   if (g_displayManager) {
     if (typeBit == hw::kBleTypeHR) {
       g_displayManager->updateHRState();
-    } else if (typeBit == hw::kBleTypeCSC) {
+    } else if (typeBit == hw::kBleTypeCSC || typeBit == hw::kBleTypePWR) {
       g_displayManager->updateCSCState();
     }
   }
 #else
   (void)typeBit;
+#endif
+}
+
+// Power is valid while the meter is subscribed and has delivered; a value
+// older than hw::kBikeStaleMs is sent as 0 (BikeMetrics.h).
+void BLERelayManager::updateBikeMetrics() {
+  _bikeMetricsMs = millis();
+  BikeSensor::PowerSample power{};
+  uint32_t powerAgeMs = 0;
+  const bool powerValid = BikeSensor::lastPower(power, powerAgeMs);
+  uint16_t rpm = 0;
+  uint32_t cadenceAgeMs = 0;
+  const bool cadenceValid = BikeSensor::lastCadence(rpm, cadenceAgeMs);
+  BikeSensor::SensorInfo info;
+  const bool fromPower = BikeSensor::info(BikeSensor::SensorType::POWER, info) && info.providesCadence;
+
+  const hw::BikeMetrics next = hw::makeBikeMetrics(powerValid, power.watts, powerAgeMs,
+                                                   cadenceValid, rpm, cadenceAgeMs, fromPower);
+  if (next == _bikeMetrics) {
+    return;
+  }
+  _bikeMetrics = next;
+#if HW_ENABLE_DISPLAY
+  if (g_displayManager) {
+    g_displayManager->setBikeMetrics(next);
+  }
+#endif
+#if HOMEWIND_ENABLE_WEBSOCKET
+  if (_telemetry) {
+    _telemetry->markDirty(TelemetryFrameType::BIKE_METRICS);
+  }
 #endif
 }
 
@@ -875,11 +933,16 @@ void BLERelayManager::staticOnHeartRate(uint16_t bpm) {
   self->_hrNew = true;
 }
 
-void BLERelayManager::staticOnCadence(uint16_t rpm) {
+void BLERelayManager::staticOnCadence(uint16_t) {
   BLERelayManager* self = _instance;
   if (!self) return;
-  self->_cadenceRpm = rpm;
   self->_cadenceNew = true;
+}
+
+void BLERelayManager::staticOnPower(const BikeSensor::PowerSample&) {
+  BLERelayManager* self = _instance;
+  if (!self) return;
+  self->_powerNew = true;
 }
 
 // Internal helpers
@@ -888,12 +951,15 @@ uint8_t BLERelayManager::stringToTypeBit(const char* type) {
   if (!type) {
     return 0;
   }
-  // Supported types: "HR", "CSC", "heart_rate", "speed_cadence" (case-insensitive)
+  // Supported types: "HR", "CSC", "PWR", "heart_rate", "speed_cadence", "power" (case-insensitive)
   if (strcasecmp(type, "HR") == 0 || strcasecmp(type, "heart_rate") == 0) {
     return hw::kBleTypeHR;
   }
   if (strcasecmp(type, "CSC") == 0 || strcasecmp(type, "speed_cadence") == 0) {
     return hw::kBleTypeCSC;
+  }
+  if (strcasecmp(type, "PWR") == 0 || strcasecmp(type, "power") == 0) {
+    return hw::kBleTypePWR;
   }
   return 0;
 }
@@ -902,6 +968,7 @@ const char* BLERelayManager::typeBitToString(uint8_t typeBit) {
   switch (typeBit) {
     case hw::kBleTypeHR: return "HR";
     case hw::kBleTypeCSC: return "CSC";
+    case hw::kBleTypePWR: return "PWR";
     default: return "UNKNOWN";
   }
 }
@@ -924,65 +991,56 @@ bool BLERelayManager::loadConfigFromNVS() {
     return false;
   }
   
-  // Try to load new blob format first
-  NVSSensorData data;
-  size_t len = prefs.getBytesLength(NVS_KEY_DATA);
-  
-  if (len == sizeof(NVSSensorData)) {
-    // New format exists
-    prefs.getBytes(NVS_KEY_DATA, &data, sizeof(data));
+  // v3 blob, or a v2 blob (1.4.45 - 1.6.x) converted to v3
+  uint8_t blob[sizeof(hw::BleNvsData)];
+  const size_t len = prefs.getBytesLength(NVS_KEY_DATA);
+  if (len == 0) {
     prefs.end();
-    
-    // Verify CRC
-    uint16_t storedCrc = data.crc16;
-    data.crc16 = 0;
-    uint16_t calcedCrc = Crc16::calcCRC16((uint8_t*)&data, sizeof(data) - sizeof(data.crc16));
-    
-    if (storedCrc != calcedCrc) {
-      HW_ERROR_PRINTF("[BLE] [NVS] CRC mismatch: stored=%04X, calculated=%04X\n", 
-                      storedCrc, calcedCrc);
-      return false;
-    }
-    
-    // Check version
-    if (data.version != NVS_DATA_VERSION) {
-      HW_DEBUG_PRINTF("[BLE] [NVS] Version mismatch: stored=%u, expected=%u\n",
-                      data.version, NVS_DATA_VERSION);
-      return false;
-    }
-    
-    // Validate sensor count (clamp if old config had more sensors, e.g. PWR removed)
-    if (data.sensorCount > MAX_SENSORS) {
-      HW_DEBUG_PRINTF("[BLE] [NVS] Clamping sensorCount from %u to %u (PWR support removed)\n", 
-                      data.sensorCount, MAX_SENSORS);
-      data.sensorCount = MAX_SENSORS;
-    }
-    
-    // Copy data to runtime structures
-    _sensorCount = data.sensorCount;
-    
-    for (uint8_t i = 0; i < _sensorCount; i++) {
-      const NVSSensorEntry& entry = data.sensors[i];
-      SensorConfig& cfg = _configuredSensors[i];
-      
-      copyStr(cfg.name, entry.name, sizeof(cfg.name));
-      copyStr(cfg.type, entry.type, sizeof(cfg.type));
-      copyStr(cfg.mac, entry.mac, sizeof(cfg.mac));
-      cfg.addrType = entry.addrType;
-      cfg.typeBit = stringToTypeBit(cfg.type);
-      
-      HW_DEBUG_PRINTF("[BLE] [NVS] → Loaded sensor %u: %s (%s) addrType=%d\n",
-                     i, cfg.name, cfg.type, cfg.addrType);
-    }
-    
-    HW_DEBUG_PRINTF("[BLE] [NVS] ✓ Loaded %u sensor(s) from blob\n", _sensorCount);
-    return true;
+    HW_DEBUG_PRINTLN("[BLE] [NVS] No config found in NVS");
+    return false;
+  }
+  const size_t got = len <= sizeof(blob) ? prefs.getBytes(NVS_KEY_DATA, blob, len) : 0;
+  prefs.end();
+
+  hw::BleNvsData data;
+  const hw::BleNvsLoad result = hw::bleNvsDecode(blob, got, data);
+  if (result != hw::BleNvsLoad::OK && result != hw::BleNvsLoad::MIGRATED) {
+    HW_ERROR_PRINTF("[BLE] [NVS] ble_data rejected (%u bytes): bad %s\n", static_cast<unsigned>(len),
+                    result == hw::BleNvsLoad::BAD_SIZE ? "size"
+                    : result == hw::BleNvsLoad::BAD_VERSION ? "version" : "CRC");
+    return false;
   }
   
-  prefs.end();
+  if (data.sensorCount > MAX_SENSORS) {
+    HW_DEBUG_PRINTF("[BLE] [NVS] Clamping sensorCount from %u to %u\n", data.sensorCount, MAX_SENSORS);
+    data.sensorCount = MAX_SENSORS;
+  }
   
-  HW_DEBUG_PRINTLN("[BLE] [NVS] No config found in NVS");
-  return false;
+  // Copy data to runtime structures
+  _sensorCount = data.sensorCount;
+  
+  for (uint8_t i = 0; i < _sensorCount; i++) {
+    const hw::BleNvsEntry& entry = data.sensors[i];
+    SensorConfig& cfg = _configuredSensors[i];
+    
+    copyStr(cfg.name, entry.name, sizeof(cfg.name));
+    copyStr(cfg.type, entry.type, sizeof(cfg.type));
+    copyStr(cfg.mac, entry.mac, sizeof(cfg.mac));
+    cfg.addrType = entry.addrType;
+    cfg.typeBit = stringToTypeBit(cfg.type);
+    
+    HW_DEBUG_PRINTF("[BLE] [NVS] → Loaded sensor %u: %s (%s) addrType=%d\n",
+                   i, cfg.name, cfg.type, cfg.addrType);
+  }
+  
+  HW_DEBUG_PRINTF("[BLE] [NVS] ✓ Loaded %u sensor(s) from blob\n", _sensorCount);
+  if (result == hw::BleNvsLoad::MIGRATED) {
+    HW_DEBUG_PRINTLN("[BLE] [NVS] Migrating ble_data v2 -> v3");
+    if (!saveConfigToNVS()) {
+      HW_ERROR_PRINTLN("[BLE] [NVS] v3 write failed, v2 stays and migrates again next boot");
+    }
+  }
+  return true;
 }
 
 /**
@@ -999,14 +1057,14 @@ bool BLERelayManager::saveConfigToNVS() {
   }
   
   // Prepare data structure
-  NVSSensorData data;
+  hw::BleNvsData data;
   memset(&data, 0, sizeof(data));
-  data.version = NVS_DATA_VERSION;
+  data.version = hw::kBleNvsVersion;
   data.sensorCount = _sensorCount;
   
   for (uint8_t i = 0; i < _sensorCount; i++) {
     const SensorConfig& cfg = _configuredSensors[i];
-    NVSSensorEntry& entry = data.sensors[i];
+    hw::BleNvsEntry& entry = data.sensors[i];
     
     strncpy(entry.name, cfg.name, sizeof(entry.name) - 1);
     entry.name[sizeof(entry.name) - 1] = '\0';
@@ -1022,9 +1080,7 @@ bool BLERelayManager::saveConfigToNVS() {
     HW_DEBUG_PRINTF("[BLE] [NVS] → Sensor %u: %s (%s) addrType=%d\n", i, cfg.name, cfg.type, cfg.addrType);
   }
   
-  // Calculate CRC
-  data.crc16 = 0;
-  data.crc16 = Crc16::calcCRC16((uint8_t*)&data, sizeof(data) - sizeof(data.crc16));
+  hw::bleNvsSeal(data);
   
   // Write blob
   size_t written = prefs.putBytes(NVS_KEY_DATA, &data, sizeof(data));

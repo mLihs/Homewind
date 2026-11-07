@@ -2,7 +2,7 @@
  * @file BLERelayManager.h
  * @brief BLE Relay Manager - integrates BikeSensor 3.0 with Homewind
  * 
- * Manages BLE sensor connections (HR, CSC), discovery, persistence,
+ * Manages BLE sensor connections (HR, CSC, power), discovery, persistence,
  * and WebSocket telemetry updates.
  * 
  * Uses deterministic struct-based NVS storage (no heap allocation for persistence).
@@ -23,7 +23,9 @@
 
 #include <BikeSensor.h>
 #include <Preferences.h>
+#include "BikeMetrics.h"
 #include "BleCommandState.h"
+#include "BleNvsBlob.h"
 
 // Forward declarations
 #if HOMEWIND_ENABLE_WEBSOCKET
@@ -42,6 +44,7 @@ static const uint8_t BLE_SENSOR_NAME_MAX = 64;
  */
 static const uint8_t BLE_DISCOVERY_MAX = 15;
 static_assert(BBS_MAX_DISCOVERED == BLE_DISCOVERY_MAX, "tools/build.sh must set -DBBS_MAX_DISCOVERED=15");
+static_assert(BBS_COMPILE_POWER == 1, "tools/build.sh must set -DBBS_COMPILE_POWER=1");
 
 /**
  * @struct HwSensorInfo
@@ -49,7 +52,7 @@ static_assert(BBS_MAX_DISCOVERED == BLE_DISCOVERY_MAX, "tools/build.sh must set 
  */
 struct HwSensorInfo {
   char name[BLE_SENSOR_NAME_MAX];  // 64 bytes
-  char type[4];                     // "HR", "CSC" + null
+  char type[4];                     // "HR", "CSC", "PWR" + null
   char mac[18];                     // "aa:bb:cc:dd:ee:ff" + null
   bool connected;
   int battery;                      // 0-100, or -1 if unknown
@@ -70,7 +73,7 @@ struct HwDiscoveredSensor {
   char name[32];                    // "" = no name seen
   uint8_t mac[6];
   uint8_t addrType;                 // 0 public, 1 random
-  uint8_t typeMask;                 // advertised ∩ requested types (bit 0 HR, bit 1 CSC)
+  uint8_t typeMask;                 // advertised ∩ requested types (bit 0 HR, bit 1 CSC, bit 2 PWR)
 };
 
 /**
@@ -90,6 +93,8 @@ enum class BleEnqueueResult : uint8_t {
  */
 class BLERelayManager {
 public:
+  static constexpr uint8_t MAX_SENSORS = hw::kBleSlots;  // HR, CSC, PWR
+
   BLERelayManager();
   ~BLERelayManager();
   
@@ -137,6 +142,12 @@ public:
   uint8_t getConnectedSensorCount() const { return _connectedCount; }
   uint8_t getLastDiscoveryCount() const { return _lastDiscoveryCount; }
   bool lastHeartRate(uint16_t& bpm) const { bpm = _hrBpm; return _hrValid; }
+  // Any task; false unless the power meter is subscribed and has sent data.
+  bool lastPower(BikeSensor::PowerSample& sample, uint32_t& ageMs) const {
+    return BikeSensor::lastPower(sample, ageMs);
+  }
+  // Loop task only: power/cadence latched by loop() for the BIKE_METRICS frame.
+  const hw::BikeMetrics& bikeMetrics() const { return _bikeMetrics; }
 
   // ---- Maintenance (loop task, called from MaintenanceMode::loop) --------
   bool quiesceForMaintenance();      // true: a discovery was open
@@ -155,33 +166,7 @@ private:
   
   // NVS namespace and keys
   static constexpr const char* NVS_NAMESPACE = "homewind";
-  static constexpr const char* NVS_KEY_DATA = "ble_data";      // New blob format
-  
-  /**
-   * @brief NVS data structure for sensor storage (deterministic, no heap)
-   */
-  #pragma pack(push, 1)
-  struct NVSSensorEntry {
-    char name[BLE_SENSOR_NAME_MAX];  // Sensor name
-    char type[4];                     // "HR", "CSC" + null
-    char mac[18];                     // MAC address string + null
-    int8_t addrType;                  // BLE address type (0=Public, 1=Random, -1=Unknown)
-    uint8_t reserved;                  // Padding
-  };
-  
-  struct NVSSensorData {
-    uint8_t version;                  // Schema version (current: 2)
-    uint8_t sensorCount;              // Number of configured sensors
-    uint8_t reserved[2];              // Padding
-    NVSSensorEntry sensors[2];        // HR, CSC (MAX_SENSORS)
-    uint16_t crc16;                   // CRC16-CCITT checksum
-  };
-  #pragma pack(pop)
-  
-  static_assert(sizeof(NVSSensorEntry) == 88, "NVSSensorEntry size mismatch");
-  static_assert(sizeof(NVSSensorData) == 182, "NVSSensorData size mismatch");
-  
-  static constexpr uint8_t NVS_DATA_VERSION = 2;
+  static constexpr const char* NVS_KEY_DATA = "ble_data";      // hw::BleNvsData (BleNvsBlob.h)
 
 #if HOMEWIND_ENABLE_WEBSOCKET
   WebSocketTelemetry* _telemetry;
@@ -190,13 +175,12 @@ private:
   // Sensor configuration cache (fixed buffers, no heap fragmentation). Loop task only.
   struct SensorConfig {
     char name[BLE_SENSOR_NAME_MAX];  // 64 bytes
-    char type[4];                     // "HR", "CSC" + null
+    char type[4];                     // "HR", "CSC", "PWR" + null
     char mac[18];                     // "aa:bb:cc:dd:ee:ff" + null
     int8_t addrType;                  // BLE address type (0=Public, 1=Random, -1=Unknown)
-    uint8_t typeBit;                  // hw::kBleTypeHR / kBleTypeCSC, 0 = invalid
+    uint8_t typeBit;                  // hw::kBleTypeHR / kBleTypeCSC / kBleTypePWR, 0 = invalid
   };
   
-  static const uint8_t MAX_SENSORS = 2;  // HR, CSC
   SensorConfig _configuredSensors[MAX_SENSORS];
   uint8_t _sensorCount;
   
@@ -223,6 +207,7 @@ private:
   bool _reconcileScheduled;
   unsigned long _lastReconcileMs;
   static const unsigned long RECONCILE_INTERVAL_MS = 250;  // Min interval between reconciles
+  uint8_t _advertisedMask;           // relay UUIDs refreshAdvertising() last applied
   bool _discoveryStopIssued;
   bool _maintDiscoveryDone;
   unsigned long _lastSnapshotMs;
@@ -240,8 +225,12 @@ private:
   uint16_t _hrBpm;
   bool _hrValid;
   bool _hrNew;
-  uint16_t _cadenceRpm;
   bool _cadenceNew;
+  bool _powerNew;
+  hw::BikeMetrics _bikeMetrics;
+  unsigned long _bikeMetricsMs;
+  // Also catches validity edges without a callback (disconnect, source change).
+  static const unsigned long BIKE_METRICS_POLL_MS = 1000;
 
   BleEnqueueResult pushCommand(const hw::BleCommand& cmd);
   BleEnqueueResult enqueueByName(hw::BleCmdKind kind, const char* name);
@@ -254,10 +243,12 @@ private:
   void processDiscoveryOps();
   void processEvents();
   void adoptSensorAddress(uint8_t typeBit);
-  void runReconcile(bool throttled);
+  void runReconcile(bool throttled, bool advertise = true);
+  void updateAdvertisedTypes();
   void refreshSnapshot();
   void markSensorsDirty();
   void notifyDisplay(uint8_t typeBit);
+  void updateBikeMetrics();
 
   static uint8_t stringToTypeBit(const char* type);
   static const char* typeBitToString(uint8_t typeBit);
@@ -265,7 +256,7 @@ private:
   static void staticOnEvent(const BikeSensor::EventInfo& e);
   static void staticOnHeartRate(uint16_t bpm);
   static void staticOnCadence(uint16_t rpm);
-  
+  static void staticOnPower(const BikeSensor::PowerSample& sample);
   static BLERelayManager* _instance;  // For static callbacks
 };
 

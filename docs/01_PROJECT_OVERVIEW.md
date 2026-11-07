@@ -88,7 +88,7 @@ Homewind powers the **PulseFanSync** system, which:
 1. **BLE Relay Manager** (fully implemented)
    - Integrated with BluetoothBikeSensorServer library
    - Sensor management (add, remove, connect, disconnect)
-   - Sensor discovery (HR, CSC sensors)
+   - Sensor discovery (HR, CSC, power sensors)
    - Persistent configuration via NVSConfigBus
    - WebSocket telemetry integration
    - HTTP API endpoints for sensor control
@@ -154,7 +154,7 @@ Homewind powers the **PulseFanSync** system, which:
 ### Project Libraries (included in workspace)
 | Library | Purpose | Feature Gate |
 |---------|---------|--------------|
-| **BluetoothBikeSensorServer** | BLE sensor relay (HR, CSC) | `HW_ENABLE_BLE` |
+| **BluetoothBikeSensorServer** | BLE sensor relay (HR, CSC, power) | `HW_ENABLE_BLE` |
 | **SmartMiFanAsync** | Xiaomi Smart Mi Fan control | `HW_ENABLE_FANS` |
 | **HomeWindWSAmoled** | AMOLED display (HR, CSC, Fans, QR) | `HW_ENABLE_DISPLAY` |
 | **GitFirmwareUpdate** | GitHub-based OTA updates | `HW_ENABLE_OTA` |
@@ -215,7 +215,7 @@ lib_deps =
 - **Firmware Updates**: ✅ Fully functional (OTA via GitHub)
 - **WiFi Management**: ✅ Dual backend (Dev: fixed creds, Prod: Captive Portal)
 - **Settings Storage**: ✅ NVS-based persistence
-- **BLE Sensor Relay**: ✅ Fully functional (HR, CSC sensors)
+- **BLE Sensor Relay**: ✅ Fully functional (HR, CSC, power sensors)
 - **Fan Control**: ✅ Fully functional (Xiaomi Smart Mi Fans)
 
 ### Compilation Status
@@ -315,7 +315,7 @@ Homewind/
     │   ├── SystemState.h/cpp # Global state management
     │   ├── FirmwareUpdateManager.h/cpp # OTA update manager
     │   ├── FanController.h/cpp         # Fan controller (SmartMiFanAsync)
-    │   ├── BLERelayManager.h/cpp       # BLE relay (HR, CSC)
+    │   ├── BLERelayManager.h/cpp       # BLE relay (HR, CSC, power)
     │   ├── MaintenanceMode.h/cpp       # Maintenance mode gate
     │   └── Timing.h          # Non-blocking timing utilities
     ├── web/                  # Web layer

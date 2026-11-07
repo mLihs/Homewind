@@ -9,6 +9,7 @@
 
 #include <cstring>
 #include "DisplayManager.h"
+#include "BikeCard.h"
 #include "../core/DebugLog.h"
 
 #if HW_ENABLE_BLE
@@ -24,12 +25,19 @@ extern FanController* g_fanController;
 
 #include <HomeWindWSAmoled.h>
 
+static_assert(HOMEWIND_WS_AMOLED_VERSION_MAJOR > 1 ||
+                  (HOMEWIND_WS_AMOLED_VERSION_MAJOR == 1 && HOMEWIND_WS_AMOLED_VERSION_MINOR >= 6),
+              "HomeWindWSAmoled >= 1.6.0 required (homewind_set_csc_power)");
+
 DisplayManager* g_displayManager = nullptr;
 
 DisplayManager::DisplayManager()
   : _initialized(false)
   , _lastHR(0)
   , _lastCadence(0)
+  , _lastPower(0)
+  , _lastPowerValid(false)
+  , _shownWatts(-1)
   , _fansDirty(false)
   , _hrValueDirty(false)
   , _cscValueDirty(false)
@@ -39,7 +47,8 @@ DisplayManager::DisplayManager()
   , _hrStateConfigured(false)
   , _cachedHRState(HR_NOT_CONFIGURATED)
   , _cscStateConfigured(false)
-  , _cachedCSCState(CSC_NOT_CONFIGURATED) {
+  , _cachedCSCState(CSC_NOT_CONFIGURATED)
+  , _cachedShowPower(false) {
   _cachedHRName[0] = '\0';
   _cachedCSCName[0] = '\0';
   _cachedUrl[0] = '\0';
@@ -82,9 +91,6 @@ void DisplayManager::loop() {
   if (_hrValueDirty.exchange(false)) {
     homewind_set_hr_value(_lastHR);
   }
-  if (_cscValueDirty.exchange(false)) {
-    homewind_set_csc_cadence(_lastCadence);
-  }
   if (_hrStateDirty.exchange(false)) {
     if (_hrStateConfigured) {
       homewind_set_hr(_cachedHRState, _cachedHRName, _lastHR);
@@ -92,8 +98,19 @@ void DisplayManager::loop() {
       homewind_set_hr_state(HR_NOT_CONFIGURATED);
     }
   }
-  if (_cscStateDirty.exchange(false)) {
-    if (_cscStateConfigured) {
+  /* Each csc setter redraws the card when its value changed: power first,
+     then one call for state, name and cadence (or cadence only). */
+  const bool cscState = _cscStateDirty.exchange(false);
+  const bool cscValue = _cscValueDirty.exchange(false);
+  if (cscState || cscValue) {
+    const int32_t watts = hw::bikeCardWatts(_cachedShowPower, _lastPowerValid, _lastPower);
+    if (watts != _shownWatts) {
+      _shownWatts = watts;
+      homewind_set_csc_power(watts);
+    }
+    if (!cscState) {
+      homewind_set_csc_cadence(_lastCadence);
+    } else if (_cscStateConfigured) {
       homewind_set_csc(_cachedCSCState, _cachedCSCName, _lastCadence);
     } else {
       homewind_set_csc_state(CSC_NOT_CONFIGURATED);
@@ -122,8 +139,8 @@ void DisplayManager::updateHRState() {
   if (!g_bleRelayManager) {
     _hrStateConfigured = false;
   } else {
-    HwSensorInfo sensors[2];
-    uint8_t count = g_bleRelayManager->getConfiguredSensors(sensors, 2);
+    HwSensorInfo sensors[BLERelayManager::MAX_SENSORS];
+    uint8_t count = g_bleRelayManager->getConfiguredSensors(sensors, BLERelayManager::MAX_SENSORS);
 
     for (uint8_t i = 0; i < count; i++) {
       if (strcmp(sensors[i].type, "HR") == 0) {
@@ -144,9 +161,11 @@ void DisplayManager::updateHRState() {
   _hrStateDirty = true;
 }
 
-void DisplayManager::setCadence(uint16_t rpm) {
+void DisplayManager::setBikeMetrics(const hw::BikeMetrics& m) {
   if (!_initialized) return;
-  _lastCadence = rpm;
+  _lastCadence = m.cadenceRpm;
+  _lastPower = m.powerW;
+  _lastPowerValid = (m.flags & hw::kBikePowerValid) != 0;
   _cscValueDirty = true;
 }
 
@@ -156,25 +175,31 @@ void DisplayManager::updateCSCState() {
 #if HW_ENABLE_BLE
   if (!g_bleRelayManager) {
     _cscStateConfigured = false;
+    _cachedShowPower = false;
   } else {
-    HwSensorInfo sensors[2];
-    uint8_t count = g_bleRelayManager->getConfiguredSensors(sensors, 2);
+    HwSensorInfo sensors[BLERelayManager::MAX_SENSORS];
+    uint8_t count = g_bleRelayManager->getConfiguredSensors(sensors, BLERelayManager::MAX_SENSORS);
 
+    const HwSensorInfo* csc = nullptr;
+    const HwSensorInfo* pwr = nullptr;
     for (uint8_t i = 0; i < count; i++) {
-      if (strcmp(sensors[i].type, "CSC") == 0) {
-        _cscStateConfigured = true;
-        _cachedCSCState = sensors[i].connected ? CSC_STATE_ACTIVE : CSC_STATE_INACTIVE;
-        if (!sensors[i].connected) _lastCadence = 0;
-        strncpy(_cachedCSCName, sensors[i].name, sizeof(_cachedCSCName) - 1);
-        _cachedCSCName[sizeof(_cachedCSCName) - 1] = '\0';
-        _cscStateDirty = true;
-        return;
-      }
+      if (!csc && strcmp(sensors[i].type, "CSC") == 0) csc = &sensors[i];
+      if (!pwr && strcmp(sensors[i].type, "PWR") == 0) pwr = &sensors[i];
     }
-    _cscStateConfigured = false;
+    const hw::BikeCard card = hw::selectBikeCard(csc != nullptr, csc && csc->connected,
+                                                 pwr != nullptr, pwr && pwr->connected);
+    _cscStateConfigured = card.state != hw::BikeCardState::NotConfigured;
+    _cachedCSCState = card.state == hw::BikeCardState::Active ? CSC_STATE_ACTIVE : CSC_STATE_INACTIVE;
+    _cachedShowPower = card.showPower;
+    const HwSensorInfo* named = card.nameFromPower ? pwr : csc;
+    if (named) {
+      strncpy(_cachedCSCName, named->name, sizeof(_cachedCSCName) - 1);
+      _cachedCSCName[sizeof(_cachedCSCName) - 1] = '\0';
+    }
   }
 #else
   _cscStateConfigured = false;
+  _cachedShowPower = false;
 #endif
   _cscStateDirty = true;
 }

@@ -238,6 +238,28 @@
     font-family: var(--font-body);
   }
 
+  /* Power & cadence card (reuses the HR range row) */
+  .bike-metric {
+    flex: 1;
+    border: var(--button-outline);
+    border-radius: var(--radius-md);
+    padding: 10px var(--spc-lg) var(--spc-md) var(--spc-lg);
+  }
+
+  .bike-unit {
+    margin-left: var(--spc-sm);
+    font-size: var(--font-size-body-medium);
+    font-weight: var(--font-weight-medium);
+    color: var(--text-muted);
+  }
+
+  .bike-hint {
+    padding: 0 var(--spc-xl) var(--spc-xl);
+    margin-top: calc(-1 * var(--spc-md));
+    font-size: var(--font-size-body-small);
+    color: var(--text-muted);
+  }
+
   .icon-edit {
     width: var(--spc-xl);
     height: var(--spc-xl);

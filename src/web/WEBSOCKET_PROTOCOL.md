@@ -49,9 +49,9 @@ Total: 12 bytes
 - `mac`: MAC address string (fixed 17 bytes, null-terminated, null-padded, format "XX:XX:XX:XX:XX:XX")
 - `connected`: Connection status (0 = disconnected, 1 = connected)
 - `battery`: Battery level in percent (0-100, 255 = unknown)
-- `status` (since 1.6.0, one byte per entry, after all entries): 0 = ok, 1 = duplicate (the other sensor type already uses this MAC; the sensor is saved but not active). Decoders that stop after `count` entries ignore it.
+- `status` (since 1.6.0, one byte per entry, after all entries): 0 = ok, 1 = duplicate (another sensor type already uses this MAC; the sensor is saved but not active). Decoders that stop after `count` entries ignore it.
 
-**Note:** Fixed-size encoding prevents heap fragmentation from variable WebSocket allocations. Each sensor entry is exactly 84 bytes, so frame size is predictable: 1 + count×85 bytes (max 171 bytes for 2 sensors).
+**Note:** Fixed-size encoding prevents heap fragmentation from variable WebSocket allocations. Each sensor entry is exactly 84 bytes, so frame size is predictable: 1 + count×85 bytes (max 256 bytes for 3 sensors). A decoder should skip a record with an unknown `type` (the WebUI does since 1.7.0).
 
 #### FANS_SNAPSHOT (0x07) - All Configured Fans
 
@@ -94,7 +94,7 @@ Sent by the server to the connecting client. The WebUI can then call:
 
 - `POST /api/v1/action/telemetry/refresh?client_id=<id>`
 
-to request **unicast** delivery of heavy snapshots (`SENSORS_SNAPSHOT`, `FANS_SNAPSHOT`) without triggering broadcast bursts. The handler only records the request; the frames follow from the main loop.
+to request **unicast** delivery of heavy snapshots (`SENSORS_SNAPSHOT`, `FANS_SNAPSHOT`, plus the small `BIKE_METRICS`) without triggering broadcast bursts. The handler only records the request; the frames follow from the main loop.
 
 **Payload:**
 ```
@@ -125,6 +125,24 @@ Sent only when state changes (marked dirty).
 ```
 
 - `value`: Heart rate in BPM (little-endian)
+
+#### BIKE_METRICS (0x0D) - Power and Cadence (since 1.7.0)
+
+**Payload:**
+```
+[power_w:int16][cadence_rpm:uint16][flags:uint8]
+```
+Total: 5 bytes
+
+- `power_w`: Instantaneous power in watts (signed, little-endian); 0 when bit 0 is clear or the last power packet is older than 3 s
+- `cadence_rpm`: Cadence in rpm (little-endian); 0 when bit 1 is clear or the value is older than 3 s
+- `flags`:
+  - bit 0: power valid. The power meter is subscribed and has sent data since it connected (BikeSensor `lastPower()`). Stays set while it is connected; without a packet for more than 3 s, `power_w` is 0.
+  - bit 1: cadence valid. The cadence source has delivered (BikeSensor `lastCadence()`): the CSC sensor while it is subscribed, otherwise a subscribed power meter once it has sent crank data. `cadence_rpm` is 0 when the last crank event (power meter) or CSC packet is older than 3 s; a CSC sensor also reports 0 itself when the crank stops.
+  - bit 2: cadence comes from the power meter (no CSC sensor is subscribed). Can be set while bit 1 is clear (power meter without crank data yet).
+  - bits 3–7: reserved, 0
+
+Sent when the encoded value changes (new power or cadence sample, or a validity change, checked at least once per second), coalesced by the dirty flag like `HEART_RATE`. Sent once per client after connect (staged connect of the first client, and with the unicast snapshots requested by `telemetry/refresh?client_id=`). Fan control uses heart rate only.
 
 #### DISCOVERY_STATUS (0x04) - Discovery State Change
 

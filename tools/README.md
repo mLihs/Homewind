@@ -40,10 +40,10 @@ Every successful build refreshes `build/<board>/manifest.json` for ESP Web Tools
 Outputs:
 
 - `build/esp32.esp32.waveshare_esp32_s3_touch_amoled_164/` and `build/esp32.esp32.XIAO_ESP32S3/` — bins, `flash_args`, `manifest.json` (what ESP Web Tools needs)
-- `build/.cache/` — object files, gitignored
+- `build/.cache/` — object files (`<variant>/`) and build stamp/`build_opt.h` (`<variant>.opt/`), gitignored
 - `~/Documents/Works/Homewind/Website/src/firmware/homewind-touch/` and `homewind-basic/` — the same bins plus `manifest.json` and `latest.json`. `notes` must be at most 160 UTF-8 bytes, the same limit the ESP uses for the web UI. Longer text stops the deploy. Umlauts and emoji count as multiple bytes.
 
-Each run writes a stamp header (`FW_VERSION` from `library.properties`, `FW_BUILD_ID` as `YYYYMMDD-HHMMSS`, and `HW_ENABLE_DISPLAY`) into the build cache. `Config.h` and `BuildInfo.h` pick it up when it is on the include path; Arduino IDE builds keep the defaults in those headers. After linking, the script checks that the Touch binary contains the touch OTA URL and the Basic binary the basic URL.
+Each run writes a stamp header (`FW_VERSION` from `library.properties`, `FW_BUILD_ID` as `YYYYMMDD-HHMMSS`, and `HW_ENABLE_DISPLAY`) and a `build_opt.h` into `build/.cache/<variant>.opt/`, outside arduino-cli's build path, and passes it with `--build-property build.opt.path=…` (arduino-cli wipes the build path whenever its build options change, e.g. after a new sketch file, and the core then leaves an empty `build_opt.h` there). `Config.h` and `BuildInfo.h` pick the stamp up when it is on the include path. The generated `build_opt.h` also sets `-DBBS_MAX_DISCOVERED=15` and `-DBBS_COMPILE_POWER=1`; builds without it (e.g. the Arduino IDE) stop at a `static_assert`, and the script fails if the compile log does not show its `build_opt.h`. When `build_opt.h` or the sketch-folder `sdkconfig.h` changes (or `sdkconfig.h` appears or disappears), the variant's object cache is deleted, because arduino-cli would keep stale library objects. After linking, the script checks that the Touch binary contains the touch OTA URL and the Basic binary the basic URL.
 
 ## update_manifest.py
 

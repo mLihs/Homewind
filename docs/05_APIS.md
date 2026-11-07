@@ -183,7 +183,7 @@ POST /api/v1/action/discovery/start?type=<sensor-type>
 Start BLE sensor discovery.
 
 **Parameters**:
-- `type` (optional): Sensor type (`HR` or `CSC`); empty = both
+- `type` (optional): Sensor type (`HR`, `CSC` or `PWR`); empty = all
 
 **Response**: `"OK"` (request queued) or `"ERR:<message>"`
 
@@ -399,13 +399,13 @@ Triggers an immediate refresh of key WebUI snapshots via WebSocket.
 
 **Parameters**:
 - `client_id` (optional): WebSocket client id (sent by server via WS control frame `CLIENT_ID (0x0C)`).
-  - If provided, heavy snapshots (`SENSORS_SNAPSHOT`, `FANS_SNAPSHOT`) are sent **unicast** to that client. The handler only records the request; the main loop sends the frames.
+  - If provided, heavy snapshots (`SENSORS_SNAPSHOT`, `FANS_SNAPSHOT`) and `BIKE_METRICS` are sent **unicast** to that client. The handler only records the request; the main loop sends the frames.
   - This avoids broadcast bursts under WS=2 and reduces cold-load heap spikes.
 
 **Response**: `"OK"` or `"ERR:<message>"`
 
 **Notes**:
-- Small frames (SYSTEM_STATUS, FIRMWARE_VERSION, HEART_RATE_SETTINGS) are always allowed.
+- Small frames (SYSTEM_STATUS, FIRMWARE_VERSION, HEART_RATE_SETTINGS) are always allowed; without `client_id`, BIKE_METRICS is broadcast too.
 - Without `client_id`, heavy snapshots are only broadcast when <=1 WS client is connected.
 
 ---
@@ -613,6 +613,8 @@ Sent only when state changes (marked dirty).
 | `FIRMWARE_VERSION` | `0x08` | Firmware version update | `[version_len:uint8][version:bytes]` |
 | `FIRMWARE_PROGRESS` | `0x09` | Firmware update progress | `[percent:uint8]` |
 | `FIRMWARE_SEARCH_RESULT` | `0x0A` | Firmware search result | `[has_update:uint8][version_len:uint8][version:bytes][notes_len:uint16][notes:bytes]` |
+| `HEART_RATE_SETTINGS` | `0x0B` | Heart rate min/max settings | `[min:uint16][max:uint16]` |
+| `BIKE_METRICS` | `0x0D` | Power and cadence | `[power_w:int16][cadence_rpm:uint16][flags:uint8]` |
 
 ---
 
@@ -656,7 +658,7 @@ const connected = frame[13];
 ```
 [name_len:uint8]          // Sensor name length
 [name:bytes]              // Sensor name (UTF-8, not null-terminated)
-[type:uint8]              // Sensor type (0=HR, 1=CSC)
+[type:uint8]              // Sensor type (0=HR, 1=CSC, 2=PWR)
 [mac_len:uint8]           // MAC address length
 [mac:bytes]               // MAC address string (not null-terminated)
 [connected:uint8]         // Connection status (0=disconnected, 1=connected)
@@ -724,7 +726,7 @@ const connected = frame[13];
 **Payload** (2 bytes):
 ```
 [active:uint8]            // Discovery active (0=inactive, 1=active)
-[type:uint8]             // Sensor type being discovered (0=HR, 1=CSC, 0xFF=all)
+[type:uint8]             // Sensor type being discovered (0=HR, 1=CSC, 2=PWR, 0xFF=all)
 ```
 
 **Sent**: When discovery starts or stops.
@@ -745,7 +747,7 @@ const connected = frame[13];
 ```
 [name_len:uint8]        // Sensor name length
 [name:bytes]            // Sensor name (UTF-8, not null-terminated)
-[type:uint8]            // Sensor type (0=HR, 1=CSC)
+[type:uint8]            // Sensor type (0=HR, 1=CSC, 2=PWR)
 [mac_len:uint8]         // MAC address length
 [mac:bytes]             // MAC address string (not null-terminated)
 ```
@@ -764,6 +766,21 @@ const connected = frame[13];
 ```
 
 **Sent**: When heart rate value changes (from connected HR sensor).
+
+---
+
+#### BIKE_METRICS (0x0D) ✅ **Implemented** (1.7.0)
+
+**Status**: Latched by `BLERelayManager::loop()` from BikeSensor `lastPower()`, `lastCadence()` and `info(POWER).providesCadence`; encoded by `hw::encodeBikeMetrics()` (`src/core/BikeMetrics.h`)
+
+**Payload** (5 bytes):
+```
+[power_w:int16]           // Power in watts (signed, little-endian), 0 if invalid or older than 3 s
+[cadence_rpm:uint16]      // Cadence in rpm (little-endian), 0 if invalid or older than 3 s
+[flags:uint8]             // bit0 power valid, bit1 cadence valid, bit2 cadence from power meter
+```
+
+**Sent**: When the encoded value changes (power/cadence sample or validity change, checked at least once per second), and once per client after connect. Cadence source: the CSC sensor while it is connected, otherwise the power meter. A value older than 3 s (power: last packet; cadence: last crank event or CSC packet) is sent as 0 with its valid bit set. Details: `src/web/WEBSOCKET_PROTOCOL.md`.
 
 ---
 

@@ -65,6 +65,21 @@
 
   </div>
 
+  <!-- Power & Cadence Card (shown with a cadence or power sensor) -->
+  <div id="bike-card" class="card bike-card" hidden>
+    <div class="hr-range-row">
+      <div class="bike-metric">
+        <div class="hr-range-label">Power</div>
+        <div class="hr-value-number"><span id="bike-power">–</span><span class="bike-unit">W</span></div>
+      </div>
+      <div class="bike-metric">
+        <div class="hr-range-label">Cadence</div>
+        <div class="hr-value-number"><span id="bike-cadence">–</span><span class="bike-unit">rpm</span></div>
+      </div>
+    </div>
+    <div id="bike-cadence-hint" class="bike-hint" hidden>Cadence from power meter</div>
+  </div>
+
   <!-- Fan Grid -->
   <div class="fan-grid">
 

@@ -115,12 +115,16 @@ detect_port() {
   printf '%s\n' "$ports" | head -n 1 | cut -f1
 }
 
+# Our files live in $opt_dir, outside the build path: arduino-cli wipes the
+# build path when build.options.json changes (e.g. a new sketch file), and the
+# core's prebuild hook then leaves an empty build_opt.h there.
 write_build_stamp() {
   local cache="$1"
   local display="$2"
-  local include_dir="$cache/include"
+  local opt_dir="$3"
+  local include_dir="$opt_dir/include"
   mkdir -p "$include_dir"
-  python3 - "$include_dir/homewind_build_stamp.h" "$cache.build_opt.h" "$display" "$VERSION" "$BUILD_ID" "$include_dir" <<'PY'
+  python3 - "$include_dir/homewind_build_stamp.h" "$opt_dir/build_opt.h.new" "$display" "$VERSION" "$BUILD_ID" "$include_dir" <<'PY'
 import sys
 header, opt, display, version, build_id, include_dir = sys.argv[1:]
 with open(header, "w", encoding="utf-8") as fh:
@@ -134,13 +138,26 @@ with open(opt, "w", encoding="utf-8") as fh:
     # Discovery snapshot size = BLE_DISCOVERY_MAX in BLERelayManager.h (15 fit
     # into one DISCOVERY_RESULTS frame). Applies to every translation unit.
     fh.write("-DBBS_MAX_DISCOVERED=15\n")
+    # Power sensor type (static_assert in BLERelayManager.h).
+    fh.write("-DBBS_COMPILE_POWER=1\n")
 PY
-  # arduino-cli does not recompile library objects when build_opt.h changes.
-  if [[ -f "$cache/build_opt.h" ]] && ! cmp -s "$cache.build_opt.h" "$cache/build_opt.h"; then
-    echo "    build_opt.h changed: discarding $cache"
-    find "$cache" -mindepth 1 -maxdepth 1 ! -name include -exec rm -rf {} +
+  # The sketch-folder sdkconfig.h shadow reaches library sources too; "none"
+  # when it is missing, so adding or removing it also counts as a change.
+  if [[ -f "$ROOT/sdkconfig.h" ]]; then
+    cp -f "$ROOT/sdkconfig.h" "$opt_dir/sdkconfig.stamp.new"
+  else
+    echo none >"$opt_dir/sdkconfig.stamp.new"
   fi
-  mv -f "$cache.build_opt.h" "$cache/build_opt.h"
+  # arduino-cli does not recompile library objects when build_opt.h or
+  # sdkconfig.h change.
+  if [[ -f "$opt_dir/build_opt.h" ]] && { ! cmp -s "$opt_dir/build_opt.h.new" "$opt_dir/build_opt.h" ||
+      ! cmp -s "$opt_dir/sdkconfig.stamp.new" "$opt_dir/sdkconfig.stamp"; }; then
+    echo "    build_opt.h or sdkconfig.h changed: discarding $cache"
+    rm -rf "$cache"
+    mkdir -p "$cache"
+  fi
+  mv -f "$opt_dir/build_opt.h.new" "$opt_dir/build_opt.h"
+  mv -f "$opt_dir/sdkconfig.stamp.new" "$opt_dir/sdkconfig.stamp"
 }
 
 library_args() {
@@ -219,6 +236,7 @@ build_variant() {
   local variant="$1"
   variant_settings "$variant"
   local cache="$CACHE_ROOT/$variant"
+  local opt_dir="$CACHE_ROOT/$variant.opt"
   local published="$ROOT/build/$BOARD_DIR"
   local log="$cache.log"
 
@@ -226,7 +244,7 @@ build_variant() {
     rm -rf "$cache"
   fi
   mkdir -p "$cache"
-  write_build_stamp "$cache" "$DISPLAY"
+  write_build_stamp "$cache" "$DISPLAY" "$opt_dir"
 
   echo
   echo "==> Build $variant  version $VERSION  build $BUILD_ID  display=$DISPLAY"
@@ -236,6 +254,7 @@ build_variant() {
   if ! arduino-cli compile \
     --fqbn "$FQBN" \
     --build-path "$cache" \
+    --build-property "build.opt.path=$opt_dir/build_opt.h" \
     --verbose \
     --warnings none \
     "${LIB_ARGS[@]}" \
@@ -245,6 +264,7 @@ build_variant() {
     exit 1
   fi
   grep -E "Sketch uses|Global variables" "$log" || true
+  grep -F "@$opt_dir/build_opt.h" "$log" >/dev/null || die "compile did not use $opt_dir/build_opt.h"
 
   [[ -f "$cache/Homewind.ino.bin" ]] || die "compile did not produce $cache/Homewind.ino.bin"
   [[ -f "$cache/flash_args" ]] || die "compile did not produce $cache/flash_args"

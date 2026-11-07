@@ -46,6 +46,9 @@
  * - FIRMWARE_VERSION (0x08): Firmware version update
  * - FIRMWARE_PROGRESS (0x09): Firmware update progress
  * - FIRMWARE_SEARCH_RESULT (0x0A): Firmware search result
+ * - BIKE_METRICS (0x0D): Power and cadence (also sent once per client on connect)
+ *
+ * 0x0C is the WebUI control frame CLIENT_ID (not a telemetry frame).
  */
 enum class TelemetryFrameType : uint8_t {
   SYSTEM_STATUS = 0x01,      // Snapshot: System health
@@ -59,6 +62,7 @@ enum class TelemetryFrameType : uint8_t {
   FIRMWARE_PROGRESS = 0x09,  // Delta: Firmware update progress
   FIRMWARE_SEARCH_RESULT = 0x0A,  // Delta: Firmware search result
   HEART_RATE_SETTINGS = 0x0B,     // Snapshot/Delta: Heart rate min/max settings
+  BIKE_METRICS = 0x0D,            // Delta: Power and cadence (hw::BikeMetrics)
 };
 
 /**
@@ -163,7 +167,7 @@ private:
   uint32_t snapshotRequests[SNAPSHOT_REQUEST_SLOTS];  // 0 = free
   
   // Frame building buffers (static to avoid heap allocation; loop task only)
-  static const size_t MAX_FRAME_SIZE = 512; // Max frame payload size (largest frame ~200 bytes)
+  static const size_t MAX_FRAME_SIZE = 512; // Type byte + payload (largest payload: DISCOVERY_RESULTS, 500 bytes)
   uint8_t frameBuffer[MAX_FRAME_SIZE];
   
   /**
@@ -246,6 +250,11 @@ private:
    * Build HEART_RATE_SETTINGS frame (snapshot/delta)
    */
   size_t buildHeartRateSettings(uint8_t* buffer, size_t bufferSize);
+
+  /**
+   * Build BIKE_METRICS frame (delta)
+   */
+  size_t buildBikeMetrics(uint8_t* buffer, size_t bufferSize);
   
   /**
    * Send full snapshot to newly connected client

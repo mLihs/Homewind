@@ -240,8 +240,8 @@ public:
   
   void setHeartRate(uint16_t bpm);
   void updateHRState();
-  void setCadence(uint16_t rpm);
-  void updateCSCState();
+  void setBikeMetrics(const hw::BikeMetrics& m);  // latched BIKE_METRICS power/cadence
+  void updateCSCState();  // cadence card over CSC and PWR (src/core/BikeCard.h)
   void updateFans();
   void markFansDirty();  // Deferred update (safe from any task, incl. LVGL event callback)
   void setUrl(const char* url);
@@ -258,7 +258,7 @@ public:
 
 **Status**: ✅ **Implemented** - Fully integrated with BluetoothBikeSensorServer library
 
-**Purpose**: Manages BLE sensor relay (HR, CSC sensors) with persistent configuration and WebSocket telemetry.
+**Purpose**: Manages BLE sensor relay (HR, CSC and power sensors, all three at the same time) with persistent configuration (`ble_data` v3, `src/core/BleNvsBlob.h`) and WebSocket telemetry.
 
 **API**:
 ```cpp

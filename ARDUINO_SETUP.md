@@ -85,12 +85,12 @@ Alle unter `~/Documents/Arduino/libraries/`. Für NimBLE-Arduino muss dort die g
 | Bibliothek | Version |
 |---|---|
 | lvgl | 8.4.0 |
-| HomeWindWSAmoled | 1.5.10 |
+| HomeWindWSAmoled | 1.6.0 |
 | NimBLE-Arduino | 2.5.2+hw1 – gepatchte Workspace-Kopie `NimBLE-Arduino/` (2.3.0–2.5.2 stürzen ab, wenn sich ein Central wie Zwift trennt; siehe `NimBLE-Arduino/PATCHES.md`) |
 | ESP Async WebServer | 3.12.0 |
 | Async TCP | 3.5.0 |
 | ArduinoJson | 7.4.3 |
-| BluetoothBikeSensorServer | 3.1.0 (≥ 3.1.0, API `BikeSensor.h`) |
+| BluetoothBikeSensorServer | 3.2.1 (≥ 3.2.1, API `BikeSensor.h`) |
 | SmartMiFanAsync | 2.0.0 |
 | wifiMangerLite | 3.1.0 (≥ 3.1.0) |
 | NVSUtilityLibrary | 1.0.1 |
@@ -115,6 +115,13 @@ liegen (neben dem Ordner `lvgl`, nicht darin). Relevante Einstellungen:
 - [ ] Richtiger Port gewählt
 
 ## 5. Build und Flash im Terminal
+
+> **Bauen nur mit `tools/build.sh`.** Das Skript erzeugt `build_opt.h` mit
+> `-DBBS_MAX_DISCOVERED=15` und `-DBBS_COMPILE_POWER=1`; ohne diese Flags
+> brechen `static_assert`s den Build ab – Sketch → Upload in der Arduino IDE
+> kompiliert daher nicht. Die `sdkconfig.h` im Homewind-Ordner erhöht die
+> BLE-Verbindungen auf 4 (HR, CSC, Power + ein Central); greift sie nicht,
+> bricht der Build ebenfalls ab.
 
 `tools/build.sh` baut beide Varianten mit den Einstellungen aus diesem
 Dokument (Touch) bzw. für das XIAO ESP32-S3 ohne Display (Basic).

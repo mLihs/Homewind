@@ -22,17 +22,18 @@ static int g_failures = 0;
 
 // Mimics the library: one slot per type, the same MAC may not be held twice.
 struct FakeLibrary : BleLibraryPort {
-  bool slotUsed[2] = {false, false};
-  char slotMac[2][18] = {};
-  bool slotConnected[2] = {false, false};
+  bool slotUsed[kBleSlots] = {};
+  char slotMac[kBleSlots][18] = {};
+  bool slotConnected[kBleSlots] = {};
   int adds = 0, removes = 0;
 
   bool connected(uint8_t t) override { return slotConnected[bleSlotOf(t)]; }
   bool add(uint8_t t, const char* mac, int8_t, const char*) override {
     adds++;
     const int i = bleSlotOf(t);
-    const int other = 1 - i;
-    if (slotUsed[other] && strcasecmp(slotMac[other], mac) == 0) return false;
+    for (int other = 0; other < kBleSlots; ++other) {
+      if (other != i && slotUsed[other] && strcasecmp(slotMac[other], mac) == 0) return false;
+    }
     slotUsed[i] = true;
     strncpy(slotMac[i], mac, 17);
     slotMac[i][17] = '\0';
@@ -204,6 +205,133 @@ static void testAdoptRetriesOtherDuplicate() {
   CHECK(r.added(kBleTypeCSC) && strcmp(lib.slotMac[1], kNewMac) == 0);
 }
 
+static void testSlotMapping() {
+  CHECK(kBleSlots == 3);
+  CHECK(bleSlotOf(kBleTypeHR) == 0 && bleSlotOf(kBleTypeCSC) == 1 && bleSlotOf(kBleTypePWR) == 2);
+  CHECK(bleSlotOf(0) == -1 && bleSlotOf(kBleTypeHR | kBleTypeCSC) == -1 && bleSlotOf(0x08) == -1);
+  for (uint8_t i = 0; i < kBleSlots; ++i) CHECK(bleSlotOf(bleTypeOfSlot(i)) == i);
+}
+
+static void testResolveDiscoveryType() {
+  const uint8_t all = kBleTypeHR | kBleTypeCSC | kBleTypePWR;
+  const uint8_t trainer = kBleTypeCSC | kBleTypePWR;
+  CHECK(bleResolveDiscoveryType(trainer, kBleTypePWR) == kBleTypePWR);
+  CHECK(bleResolveDiscoveryType(trainer, kBleTypeCSC) == kBleTypeCSC);
+  CHECK(bleResolveDiscoveryType(trainer, all) == kBleTypeCSC);
+  CHECK(bleResolveDiscoveryType(all, kBleTypeHR | kBleTypePWR) == kBleTypeHR);
+  CHECK(bleResolveDiscoveryType(kBleTypePWR, all) == kBleTypePWR);
+  CHECK(bleResolveDiscoveryType(0, all) == 0);
+  CHECK(bleResolveDiscoveryType(0x08, all) == 0);
+  // Requested types not advertised: the first advertised in slot order.
+  CHECK(bleResolveDiscoveryType(trainer, kBleTypeHR) == kBleTypeCSC);
+  CHECK(bleResolveDiscoveryType(kBleTypePWR | 0x08, 0) == kBleTypePWR);
+}
+
+static void testPowerSlotReconcile() {
+  BleReconciler r;
+  FakeLibrary lib;
+  r.setTarget(kBleTypeHR, "HR", kMacA, 0, true, false);
+  r.setTarget(kBleTypePWR, "ASSIOMA", kMacB, 1, true, false);
+  r.run(lib);
+  CHECK(r.added(kBleTypeHR) && r.added(kBleTypePWR) && !r.added(kBleTypeCSC));
+  CHECK(lib.slotUsed[2] && strcmp(lib.slotMac[2], kMacB) == 0);
+  CHECK(!r.pending());
+  // Only the power target is pending; it waits for the disconnect.
+  lib.slotConnected[2] = true;
+  r.setTarget(kBleTypePWR, "ASSIOMA2", "aa:bb:cc:dd:ee:03", 1, true, false);
+  r.run(lib);
+  CHECK(r.pending() && strcmp(lib.slotMac[2], kMacB) == 0);
+  lib.slotConnected[2] = false;
+  r.run(lib);
+  CHECK(!r.pending() && strcmp(lib.slotMac[2], "aa:bb:cc:dd:ee:03") == 0);
+  r.setTarget(kBleTypePWR, "", "", -1, false, true);
+  r.run(lib);
+  CHECK(!r.added(kBleTypePWR) && !lib.slotUsed[2] && r.added(kBleTypeHR));
+}
+
+static void testTrainerCscAndPowerDuplicate() {
+  // A trainer advertising CSC and power, saved for both: CSC (slot order) gets it.
+  BleReconciler r;
+  FakeLibrary lib;
+  r.setTarget(kBleTypePWR, "NEO", kMacA, 1, true, false);
+  r.setTarget(kBleTypeCSC, "NEO", kMacA, 1, true, false);
+  r.run(lib);
+  CHECK(r.added(kBleTypeCSC) && !r.duplicate(kBleTypeCSC));
+  CHECK(!r.added(kBleTypePWR) && r.duplicate(kBleTypePWR));
+  CHECK(!r.pending());
+  // CSC deleted: power is retried in the same run and takes the address.
+  r.setTarget(kBleTypeCSC, "", "", -1, false, true);
+  r.run(lib);
+  CHECK(!r.added(kBleTypeCSC) && r.added(kBleTypePWR) && !r.duplicate(kBleTypePWR));
+  CHECK(lib.slotUsed[2] && strcmp(lib.slotMac[2], kMacA) == 0);
+  // HR picks the same address now: HR is the duplicate, power stays.
+  r.setTarget(kBleTypeHR, "HR", kMacA, 1, true, false);
+  r.run(lib);
+  CHECK(r.duplicate(kBleTypeHR) && r.added(kBleTypePWR));
+}
+
+static void testAdoptAppliedPowerSlot() {
+  // A power meter with a random address (e.g. Assioma) followed by name.
+  static const char* kNewMac = "e1:23:97:c6:37:12";
+  BleReconciler r;
+  FakeLibrary lib;
+  CHECK(!r.adoptApplied(kBleTypePWR, kNewMac, 1));          // not added
+  r.setTarget(kBleTypePWR, "ASSIOMA", kMacB, 1, true, false);
+  r.setTarget(kBleTypeCSC, "CAD", kMacB, 1, true, false);
+  r.run(lib);
+  CHECK(r.added(kBleTypeCSC) && r.duplicate(kBleTypePWR));
+  r.setTarget(kBleTypeCSC, "CAD", kMacA, 1, true, false);
+  r.run(lib);
+  CHECK(r.added(kBleTypePWR) && !r.duplicate(kBleTypePWR));
+  strcpy(lib.slotMac[2], kNewMac);
+  lib.slotConnected[2] = true;
+  CHECK(r.adoptApplied(kBleTypePWR, kNewMac, 1));
+  CHECK(!r.pending());
+  const int adds = lib.adds, removes = lib.removes;
+  r.setTarget(kBleTypePWR, "ASSIOMA", kNewMac, 1, true, false);
+  r.run(lib);
+  CHECK(lib.adds == adds && lib.removes == removes && !r.pending());
+  // forgetApplied() (maintenance) clears all three slots.
+  r.forgetApplied();
+  CHECK(!r.added(kBleTypeHR) && !r.added(kBleTypeCSC) && !r.added(kBleTypePWR));
+  CHECK(!r.duplicate(kBleTypePWR) && !r.pending());
+}
+
+static void testAdvertisedTypes() {
+  const uint8_t kHrCsc = kBleTypeHR | kBleTypeCSC;
+  CHECK(bleAdvertisedTypes(0, 0) == kHrCsc);                 // nothing configured: 1.6.x
+  CHECK(bleAdvertisedTypes(0xF8, 0xF8) == kHrCsc);           // no HR/CSC/PWR bit
+  CHECK(bleAdvertisedTypes(kBleTypePWR, kBleTypePWR) == kBleTypePWR);
+  CHECK(bleAdvertisedTypes(kBleTypeHR | kBleTypePWR | 0x80, 0x07) == (kBleTypeHR | kBleTypePWR));
+  CHECK(bleAdvertisedTypes(0x07, 0x07) == 0x07);
+  CHECK(bleAdvertisedTypes(kBleTypeCSC, 0x07) == kBleTypeCSC);   // added wins over configured
+  CHECK(bleAdvertisedTypes(0, kBleTypePWR) == kBleTypePWR);  // only power meter disconnected
+  CHECK(bleAdvertisedTypes(0, kBleTypeCSC | kBleTypePWR | 0x80) == (kBleTypeCSC | kBleTypePWR));
+
+  BleReconciler r;
+  FakeLibrary lib;
+  CHECK(r.addedMask() == 0);
+  r.setTarget(kBleTypeHR, "HR", kMacA, 0, true, false);
+  r.setTarget(kBleTypePWR, "ASSIOMA", kMacB, 1, true, false);
+  r.run(lib);
+  CHECK(r.addedMask() == (kBleTypeHR | kBleTypePWR));
+  r.setTarget(kBleTypeCSC, "CSC", kMacA, 0, true, false);    // duplicate: not added
+  r.run(lib);
+  CHECK(r.duplicate(kBleTypeCSC) && r.addedMask() == (kBleTypeHR | kBleTypePWR));
+  lib.slotConnected[2] = true;                               // disabled while connected,
+  r.setTarget(kBleTypePWR, "", "", -1, false, false);        // no force: still added
+  r.run(lib);
+  CHECK(r.addedMask() == (kBleTypeHR | kBleTypePWR));
+  lib.slotConnected[2] = false;
+  r.run(lib);
+  CHECK(r.addedMask() == kBleTypeHR);
+  r.setTarget(kBleTypeHR, "", "", -1, false, true);          // HR deleted: CSC retried
+  r.run(lib);
+  CHECK(r.addedMask() == kBleTypeCSC);
+  r.forgetApplied();
+  CHECK(r.addedMask() == 0 && bleAdvertisedTypes(r.addedMask(), 0) == kHrCsc);
+}
+
 static void testCommandQueue() {
   BleCommandQueue q;
   BleCommand c = {};
@@ -283,6 +411,12 @@ int main() {
   testAddrTypeChangeReapplies();
   testAdoptApplied();
   testAdoptRetriesOtherDuplicate();
+  testSlotMapping();
+  testResolveDiscoveryType();
+  testPowerSlotReconcile();
+  testTrainerCscAndPowerDuplicate();
+  testAdoptAppliedPowerSlot();
+  testAdvertisedTypes();
   testCommandQueue();
   testDiscoveryQueue();
   if (g_failures) {

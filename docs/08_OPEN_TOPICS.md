@@ -14,7 +14,7 @@ This document tracks TODOs, known issues, planned features, and open questions.
 - **Firmware Updates** - OTA updates via GitHub with state machine
 - **WiFi Management** - STA connection with AP fallback
 - **Maintenance Mode** - API endpoint gating during critical operations
-- **BLE Relay Manager** - BLE sensor relay with BluetoothBikeSensorServer integration (HR, CSC)
+- **BLE Relay Manager** - BLE sensor relay with BluetoothBikeSensorServer integration (HR, CSC, power)
 - **Fan Controller** - SmartMiFanAsync integration, discovery, NVS config, WebSocket telemetry
 - **Display Manager** - HomeWindWSAmoled integration with dirty-flag deferred LVGL updates
 - **Sensor Management** - Sensor configuration, discovery, connection management
