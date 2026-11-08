@@ -80,6 +80,7 @@ Homewind powers the **PulseFanSync** system, which:
 8. **Serial Debug Commands** (via `HW_ENABLE_SERIAL_COMMANDS`)
    - `h` - Heap info (Initial, Free, Used since boot, Largest block, Fragmentation%)
    - `s` - System status (Version, Uptime, Boot phase, WiFi state)
+   - `t` - Tasks (name, priority, core, stack high-water mark in bytes) and heap caps INTERNAL/DMA/SPIRAM (free, largest block, minimum free)
    - `?` - Help
    - Boot heap tracking for memory leak detection
 

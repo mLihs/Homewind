@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.1] - 2026-11-08
+
+Touch display: about 32 KB more free internal RAM, a faster settings/QR slide, a more responsive touch, and the main and standby screens no longer show stale sensor values. Basic: no functional change.
+
+### Added
+
+- **Serial command `t`** (with `HW_ENABLE_SERIAL_COMMANDS=1`): lists all tasks (name, priority, core, stack high-water mark in bytes) via `uxTaskGetSystemState()` and prints free, largest free block and minimum free for the INTERNAL, DMA and SPIRAM heap caps. Off by default; no change to release builds.
+
+### Changed
+
+- **HomeWindWSAmoled 1.6.1** (Touch): two half-size LVGL draw buffers (28 lines, 2 × 15,680 B instead of 2 × 31,920 B) and a QSPI `max_transfer_sz` of one draw buffer instead of a full frame; about 32.5 KB more free internal RAM. The settings/QR overlay slides in faster (60 px in 180 ms instead of the full height in 300 ms). `DisplayManager` still requires ≥ 1.6.0.
+
+### Fixed
+
+- **Touch (HomeWindWSAmoled 1.6.1):** the standby screen kept the HR and cadence values of the previous standby until the value changed; the main screen stopped updating after waking from standby with the settings window open; the touch controller was read only about every 150 ms, so the touch felt sticky and short taps could be lost (now every 20 ms); a failed touch read could report a press at random coordinates. All observed since before 1.5.
+
+### Measured (Touch, internal RAM, all sensors + Zwift + WebUI)
+
+- 1.7.0, 69 min: free 14.8–17.9 KB, largest free block 7.7 KB. With HomeWindWSAmoled 1.6.1, 87 min: free 47.8–52.8 KB, largest free block 31.7 KB, lowest free since boot 38.9 KB (`docs/HEAP_BENCHMARK.md`).
+
+- **Release note (≤ 160 B):** `Touch: about 32 KB more free RAM, faster settings slide, more responsive touch, current values on the main and standby screens.` (127 B)
+- **Version:** 1.7.1, **Build ID:** `20261108-132928`
+- **Dependency:** Touch: HomeWindWSAmoled 1.6.1 for the fixes and the RAM gain (builds with ≥ 1.6.0); otherwise as 1.7.0
+
 ## [1.7.0] - 2026-11-07
 
 Power meter support. A power meter is a third sensor next to heart rate and cadence, and all three can be connected at the same time (four BLE links: three sensors plus Zwift or Rouvy). The web UI gets a **Power** row in the sensor setup and a dashboard tile with power and cadence; the Touch display shows the watts on the cadence card. Homewind now advertises only the sensor types you have set up, so apps no longer offer it as a power source without a power meter. Sensor settings move to NVS format v3, migrated automatically on the first start; after a downgrade to 1.6.x the sensors must be set up again.

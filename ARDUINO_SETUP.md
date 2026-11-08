@@ -85,7 +85,7 @@ Alle unter `~/Documents/Arduino/libraries/`. Für NimBLE-Arduino muss dort die g
 | Bibliothek | Version |
 |---|---|
 | lvgl | 8.4.0 |
-| HomeWindWSAmoled | 1.6.0 |
+| HomeWindWSAmoled | 1.6.1 |
 | NimBLE-Arduino | 2.5.2+hw1 – gepatchte Workspace-Kopie `NimBLE-Arduino/` (2.3.0–2.5.2 stürzen ab, wenn sich ein Central wie Zwift trennt; siehe `NimBLE-Arduino/PATCHES.md`) |
 | ESP Async WebServer | 3.12.0 |
 | Async TCP | 3.5.0 |

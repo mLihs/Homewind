@@ -14,6 +14,12 @@
 #include "../core/HeapDiagnostics.h"
 #include "../core/MaintenanceMode.h"
 
+#if HW_ENABLE_SERIAL_COMMANDS
+#include <esp_heap_caps.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#endif
+
 #if HW_ENABLE_NVS
 #include "../settings/SettingsStore.h"
 #endif
@@ -300,6 +306,58 @@ void App::loop() {
 }
 
 #if HW_ENABLE_SERIAL_COMMANDS
+// StackType_t is 1 byte on the Xtensa port, so usStackHighWaterMark is in bytes.
+static_assert(sizeof(StackType_t) == 1, "stack high-water mark is printed as bytes");
+
+static void printTasksAndHeapCaps() {
+  static TaskStatus_t tasks[32];
+  UBaseType_t capacity = uxTaskGetNumberOfTasks() + 4;
+  if (capacity > sizeof(tasks) / sizeof(tasks[0])) {
+    capacity = sizeof(tasks) / sizeof(tasks[0]);
+  }
+  UBaseType_t count = uxTaskGetSystemState(tasks, capacity, nullptr);
+
+  Serial.println(F("\n===== TASKS ====="));
+  if (count == 0) {
+    Serial.printf("[Serial] uxTaskGetSystemState failed (%u tasks, capacity %u)\n",
+                  static_cast<unsigned>(uxTaskGetNumberOfTasks()), static_cast<unsigned>(capacity));
+  } else {
+    Serial.println(F("Name              Prio Core  StackMin(B)"));
+    for (UBaseType_t i = 0; i < count; i++) {
+#if configTASKLIST_INCLUDE_COREID == 1
+      char core[4];
+      if (tasks[i].xCoreID == tskNO_AFFINITY) {
+        snprintf(core, sizeof(core), "-");
+      } else {
+        snprintf(core, sizeof(core), "%d", static_cast<int>(tasks[i].xCoreID));
+      }
+#else
+      const char* core = "?";
+#endif
+      Serial.printf("%-16s  %4u %4s  %11u\n", tasks[i].pcTaskName,
+                    static_cast<unsigned>(tasks[i].uxCurrentPriority), core,
+                    static_cast<unsigned>(tasks[i].usStackHighWaterMark));
+    }
+  }
+
+  Serial.println(F("\n===== HEAP CAPS ====="));
+  Serial.println(F("Caps        Free(B)  Largest(B)  MinFree(B)"));
+  const struct { const char* name; uint32_t caps; } kCaps[] = {
+    {"INTERNAL", MALLOC_CAP_INTERNAL},
+    {"DMA",      MALLOC_CAP_DMA},
+    {"SPIRAM",   MALLOC_CAP_SPIRAM},
+  };
+  for (const auto& c : kCaps) {
+    multi_heap_info_t info;
+    heap_caps_get_info(&info, c.caps);
+    Serial.printf("%-8s  %9u  %10u  %10u\n", c.name,
+                  static_cast<unsigned>(info.total_free_bytes),
+                  static_cast<unsigned>(info.largest_free_block),
+                  static_cast<unsigned>(info.minimum_free_bytes));
+  }
+  Serial.println(F("=====================\n"));
+}
+
 void App::handleSerialCommands() {
   if (!Serial.available()) {
     return;
@@ -331,11 +389,17 @@ void App::handleSerialCommands() {
       Serial.println(F("=========================\n"));
       break;
       
+    case 't':
+    case 'T':
+      printTasksAndHeapCaps();
+      break;
+      
     case '?':
       // Help
       Serial.println(F("\n===== SERIAL COMMANDS ====="));
       Serial.println(F("h - Heap info (memory, fragmentation)"));
       Serial.println(F("s - System status (version, uptime, WiFi)"));
+      Serial.println(F("t - Task stack high-water marks, heap caps"));
       Serial.println(F("? - Show this help"));
       Serial.println(F("===========================\n"));
       break;

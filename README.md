@@ -131,7 +131,7 @@ Homewind libraries (by the author):
 | [GitFirmwareUpdate](https://github.com/mLihs/GitFirmwareUpdate) | 1.0.4 | OTA firmware updates |
 | [wifiMangerLite](https://github.com/mLihs/wifiMangerLite) | 3.1.0 (required: ≥ 3.1.0) | Wi-Fi setup via captive portal, NVS storage |
 | [NVSUtilityLibrary](https://github.com/mLihs/NVSUtilityLibrary) | 1.0.1 | NVS settings storage (JSON) |
-| [HomeWindWSAmoled](https://github.com/mLihs/HomeWindWSAmoled) | 1.6.0 | AMOLED display UI with LVGL (Touch only) |
+| [HomeWindWSAmoled](https://github.com/mLihs/HomeWindWSAmoled) | 1.6.1 | AMOLED display UI with LVGL (Touch only) |
 | DebugLog | 1.1.0 | Logging |
 
 Third-party libraries (Library Manager):
