@@ -3,25 +3,35 @@
 [![License](https://img.shields.io/badge/license-PU%2BCU-blue.svg)](LICENSE)
 [![Website](https://img.shields.io/badge/web-homewind.io-f00f66.svg)](https://homewind.io)
 
-**Homewind is free ESP32 firmware that sets your Xiaomi Smart Fan's speed from your heart rate and links your sensors to Zwift and Rouvy on Apple TV.**
+**Homewind is free ESP32 firmware that sets your Xiaomi Smart Fan's speed from your heart rate (and optionally power) and links your sensors to Zwift and Rouvy on Apple TV.**
+
+### Install in the browser — no coding, no tools
+
+You do **not** need the Arduino IDE, PlatformIO, or any firmware experience. On a computer:
+
+1. Plug the board in with a **USB data** cable.
+2. Open **[homewind.io](https://homewind.io)** in **Chrome** or **Edge** (Safari and Firefox cannot flash).
+3. Click **Homewind Touch** or **Homewind Basic flashen / Flash**, pick the serial port, and wait.
+
+That is the whole install. Setup continues on your phone in the browser; later updates can go over the air from the web UI.
+
+→ **Website, setup guide and one-click install: [homewind.io](https://homewind.io)** · German: [homewind.io/de](https://homewind.io/de/)
 
 <!-- Demo GIF: rider pedals, heart rate rises, fan speeds up. Replace the path once the clip exists. -->
 <!-- ![Homewind demo](docs/media/homewind-demo.gif) -->
 
-- **Heart-rate fan control.** You set the heart rate where the fan starts and where it reaches full speed. In between, fan speed follows your pulse.
+- **Fan modes Pure, Smart and Hybrid.** Pure follows your pulse as before. Smart shapes the speed (quick rise, slow cool-down). Hybrid takes the higher of Smart and a power curve from your FTP. Choose the mode in the web UI; default is Pure.
 - **Bluetooth sensor hub for Apple TV.** Pair heart rate, power, speed and cadence sensors once with Homewind. Zwift or Rouvy then see a single Bluetooth device.
-- **No soldering, no programming.** Flash the firmware in your browser, set it up on your phone, update over the air.
+- **No soldering, no programming.** Flash in the browser as above, set it up on your phone, update over the air.
 - **Local only.** Homewind talks to the fan over your home Wi-Fi.
-
-→ **Website, setup guide and one-click install: [homewind.io](https://homewind.io)**
 
 ## Get started (no coding)
 
 1. Get a supported Xiaomi fan and one of the two boards below.
-2. Open [homewind.io](https://homewind.io) in Chrome or Edge on a desktop, connect the board via USB and click **Flash**.
+2. Flash from [homewind.io](https://homewind.io) in Chrome or Edge (see above) — USB in, click Flash, done.
 3. Connect to the `Homewind` Wi-Fi, choose your 2.4 GHz network and follow the setup page.
 4. Read your fan's token with the [Xiaomi Cloud Token Extractor](https://github.com/mLihs/GUI-Miio-Tokenextrator-All-Plattforms/releases) (desktop app for macOS, Windows and Linux; log in with your Xiaomi account or by QR code) and paste the 32-character token into the **Fans** section.
-5. Optional: add your Bluetooth sensors in the **BLE** section.
+5. Optional: add your Bluetooth sensors in the **BLE** section; for Hybrid, set FTP and cool-down under fan mode.
 
 Full guide: [homewind.io/setup](https://homewind.io/setup/) · German: [homewind.io/de/anleitung](https://homewind.io/de/anleitung/)
 
@@ -45,7 +55,7 @@ Several fans can be controlled at once. Your fan is missing? [Open an issue](../
 
 ### Sensors
 
-Bluetooth Low Energy heart rate, power, speed and cadence sensors. ANT+ is not supported. One sensor per type (heart rate, cadence, power) can be connected at the same time; the web UI dashboard and the Touch display show power and cadence. Cadence comes from the cadence sensor while it is connected, otherwise from the power meter (for example while the cadence sensor is asleep or out of range). With both set up, Zwift or Rouvy get one cadence: the cadence sensor's while it is connected, else the power meter's. With a cadence sensor set up, pair cadence in the app to Homewind's cadence (speed/cadence) sensor; Homewind's power data carries cadence only while the cadence sensor is not connected. A trainer that sends power and cadence: add it as **Power** only; cadence then comes from it while no cadence sensor is connected. Added as cadence sensor, it cannot also be added as power meter (same Bluetooth address). The fan follows heart rate only.
+Bluetooth Low Energy heart rate, power, speed and cadence sensors. ANT+ is not supported. One sensor per type (heart rate, cadence, power) can be connected at the same time; the web UI dashboard and the Touch display show power and cadence. Cadence comes from the cadence sensor while it is connected, otherwise from the power meter (for example while the cadence sensor is asleep or out of range). With both set up, Zwift or Rouvy get one cadence: the cadence sensor's while it is connected, else the power meter's. With a cadence sensor set up, pair cadence in the app to Homewind's cadence (speed/cadence) sensor; Homewind's power data carries cadence only while the cadence sensor is not connected. A trainer that sends power and cadence: add it as **Power** only; cadence then comes from it while no cadence sensor is connected. Added as cadence sensor, it cannot also be added as power meter (same Bluetooth address). The fan follows Pure / Smart / Hybrid as set in the web UI (default Pure = heart rate only).
 
 Zwift and Rouvy see Homewind only for the sensor types you have set up (with none set up: heart rate and speed/cadence). After adding or removing a sensor type, let the app search for devices again.
 

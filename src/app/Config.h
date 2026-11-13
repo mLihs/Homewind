@@ -83,6 +83,16 @@
 #define HW_ENABLE_FANS 1
 #endif
 
+// Fan modes Smart and Hybrid (docs/FAN_POWER_HR_CONCEPT.md). With 0 the fans
+// follow the Pure HR law of 1.7.1 only (no mode selector / NVS fan_mode).
+// Depends on: HW_ENABLE_FANS, HW_ENABLE_BLE, HW_ENABLE_NVS
+#ifndef HW_ENABLE_FAN_POWER_MODE
+#define HW_ENABLE_FAN_POWER_MODE 1
+#endif
+#if HW_ENABLE_FAN_POWER_MODE && !(HW_ENABLE_FANS && HW_ENABLE_BLE && HW_ENABLE_NVS)
+#error "HW_ENABLE_FAN_POWER_MODE requires HW_ENABLE_FANS, HW_ENABLE_BLE and HW_ENABLE_NVS"
+#endif
+
 // OTA Update support (optional, starts after PH_RUNNING)
 #ifndef HW_ENABLE_OTA
 #define HW_ENABLE_OTA 1

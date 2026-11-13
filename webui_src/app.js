@@ -21,6 +21,7 @@
     HEART_RATE_SETTINGS: 0x0B,
     CLIENT_ID: 0x0C, // Control: [0x0C][clientId:uint32 LE]
     BIKE_METRICS: 0x0D,
+    FAN_CONTROL: 0x0E, // test firmware only (HW_ENABLE_FAN_POWER_MODE)
   };
 
   const SENSOR_TYPE_REV = { 0: "HR", 1: "CSC", 2: "PWR" };
@@ -47,6 +48,7 @@
     firmwareVersion: "",
     firmwareProgress: 0,
     discovery: { active: false, type: null, results: [], generation: 0 },
+    fanControl: null, // last FAN_CONTROL frame; null on firmware without it
   };
 
   // ---- DOM helpers (tiny, no framework) ----
@@ -167,6 +169,8 @@
     // Power & cadence tile: only with a cadence or power sensor
     const bikeCard = $("bike-card");
     if (bikeCard) bikeCard.hidden = !list.some((x) => x.type === "CSC" || x.type === "PWR");
+    fanModeSensorsKnown = true;
+    renderFanMode();
   }
 
   // BIKE_METRICS flags: bit0 power valid, bit1 cadence valid, bit2 cadence from power meter
@@ -175,6 +179,153 @@
     if (p) p.textContent = (flags & 1) ? String(watts) : "–";
     if (c) c.textContent = (flags & 2) ? String(rpm) : "–";
     if (hint) hint.hidden = !(flags & 4);
+  }
+
+  // ---- Fan mode (FAN_CONTROL, test firmware only) ----
+  const FAN_MODES = ["pure", "smart", "hybrid"];
+  const FAN_MODE_MIN_SPAN_BPM = 30; // hw::kFanMinSpanBpm
+  const FAN_MODE_ERRORS = {
+    no_hr_sensor: "Hybrid needs a heart rate sensor.",
+    no_power_source: "Hybrid needs a power meter.",
+    hr_span_too_small: "Hybrid needs a heart rate range (max − min) of at least 30 bpm.",
+    maintenance_active: "Maintenance is running, try again shortly.",
+    MAINTENANCE_MODE: "Maintenance is running, try again shortly.",
+  };
+  let fanModeError = "";
+  let fanModeErrorTimer = null;
+  let fanModeSensorsKnown = false; // FAN_CONTROL arrives before SENSORS_SNAPSHOT on connect
+
+  // Same preconditions as fanmode/set: sensors configured (not connected), HR span
+  function hybridBlocker() {
+    const types = Array.from(state.sensors.values()).filter((s) => !s.duplicate).map((s) => s.type);
+    if (!types.includes("HR")) return "no_hr_sensor";
+    if (!types.includes("PWR")) return "no_power_source";
+    const min = parseInt(($("hr-min-value") || {}).textContent, 10);
+    const max = parseInt(($("hr-max-value") || {}).textContent, 10);
+    if (!(max - min >= FAN_MODE_MIN_SPAN_BPM)) return "hr_span_too_small";
+    return "";
+  }
+
+  function renderFanMode() {
+    const fc = state.fanControl;
+    const card = $("hr-card");
+    if (!card || !fc) return;
+    if (!card.classList.contains("fanmode")) {
+      card.classList.add("fanmode");
+      const head = card.querySelector(".fanmode-head");
+      if (head) head.hidden = false;
+      const minLabel = card.querySelector('.hr-range[data-type="min"] .hr-range-label');
+      const maxLabel = card.querySelector('.hr-range[data-type="max"] .hr-range-label');
+      if (minLabel) minLabel.textContent = "Min HR";
+      if (maxLabel) maxLabel.textContent = "Max HR";
+    }
+    card.classList.toggle("fanmode-hybrid", fc.mode === 2);
+    card.classList.toggle("fanmode-shaped", fc.mode !== 0);
+
+    const blocker = fanModeSensorsKnown ? hybridBlocker() : "";
+    const seg = card.querySelector(".fanmode-seg");
+    if (seg) seg.style.setProperty("--sel", String(fc.mode));
+    card.querySelectorAll("[data-mode]").forEach((btn) => {
+      const selected = btn.dataset.mode === FAN_MODES[fc.mode];
+      // aria-disabled instead of disabled: a tap on blocked Hybrid explains why
+      btn.setAttribute("aria-disabled", String(!selected && btn.dataset.mode === "hybrid" && blocker !== ""));
+      btn.setAttribute("aria-pressed", String(selected));
+      btn.classList.toggle("is-selected", selected);
+    });
+
+    const ftpValue = $("fanmode-ftp-value");
+    if (ftpValue) ftpValue.textContent = String(fc.ftpW);
+
+    const coolSeg = card.querySelector(".fanmode-cool-seg");
+    if (coolSeg) coolSeg.style.setProperty("--sel", String(fc.cooldown + 2));
+    card.querySelectorAll("[data-cool]").forEach((btn) => {
+      const selected = Number(btn.dataset.cool) === fc.cooldown;
+      btn.setAttribute("aria-pressed", String(selected));
+      btn.classList.toggle("is-selected", selected);
+    });
+
+    let text = fanModeError;
+    if (!text && fc.mode === 2 && fc.effective !== 2) {
+      text = (fc.reason === 2)
+        ? "Running as Smart: heart rate span below 30 bpm."
+        : "Running as Smart: no power data.";
+    }
+    const hint = $("fanmode-hint");
+    if (hint) {
+      hint.textContent = text;
+      hint.hidden = !text;
+    }
+  }
+
+  async function setFanMode(params) {
+    const res = await httpPost("/api/v1/action/fanmode/set", params);
+    fanModeError = "";
+    if (!res.ok) {
+      let code = "";
+      try { code = JSON.parse(res.error).error || ""; } catch (_) {}
+      fanModeError = FAN_MODE_ERRORS[code] || ("Fan mode not changed: " + (code || res.error));
+      clearTimeout(fanModeErrorTimer);
+      fanModeErrorTimer = setTimeout(() => { fanModeError = ""; renderFanMode(); }, 5000);
+    }
+    renderFanMode();
+  }
+
+  function openFtpModal() {
+    if (!window.AppModal || !state.fanControl) return;
+    const container = document.createElement("div");
+    container.innerHTML = `
+      <input type="number" class="fan-token-input fan-token-input-full"
+        min="100" max="500" step="5" inputmode="numeric" />
+      <div class="fan-modal-error" aria-live="polite"></div>
+    `;
+    const input = container.querySelector("input");
+    const errorEl = container.querySelector(".fan-modal-error");
+    input.value = String(state.fanControl.ftpW);
+
+    window.AppModal.open({
+      title: "FTP",
+      subline: "Power reference for Hybrid (100–500 W)",
+      content: container,
+      saveLabel: "Save",
+      cancelLabel: "Cancel",
+      onSave: () => {
+        const watts = parseInt(input.value, 10);
+        if (!(watts >= 100 && watts <= 500)) {
+          errorEl.textContent = "Enter a value from 100 to 500 W.";
+          errorEl.classList.add("is-visible");
+          return false;
+        }
+        if (watts !== state.fanControl.ftpW) setFanMode({ ftp: watts });
+        window.AppModal.close();
+        return true;
+      },
+      onOpen: () => input.focus(),
+    });
+  }
+
+  function initFanMode() {
+    const card = $("hr-card");
+    if (!card) return;
+    card.addEventListener("click", (evt) => {
+      const btn = evt.target.closest("[data-mode]");
+      if (btn) {
+        if (btn.getAttribute("aria-disabled") === "true") {
+          if (typeof window.showErrorModal === "function") {
+            window.showErrorModal(FAN_MODE_ERRORS[hybridBlocker()] || "Hybrid is not available right now.", { title: "Hybrid not available" });
+          }
+        } else if (state.fanControl && btn.dataset.mode !== FAN_MODES[state.fanControl.mode]) {
+          setFanMode({ mode: btn.dataset.mode });
+        }
+        return;
+      }
+      const cool = evt.target.closest("[data-cool]");
+      if (cool) {
+        const level = Number(cool.dataset.cool);
+        if (state.fanControl && level !== state.fanControl.cooldown) setFanMode({ cooldown: level });
+        return;
+      }
+      if (evt.target.closest("#fanmode-ftp")) openFtpModal();
+    });
   }
   
   function updateHrWidgetFromSensors(sensorList) {
@@ -324,6 +475,23 @@
         const hrMaxDisplay = document.getElementById("hr-max-value");
         if (hrMinDisplay) hrMinDisplay.textContent = min;
         if (hrMaxDisplay) hrMaxDisplay.textContent = max;
+        renderFanMode();
+        return;
+      }
+
+      case FRAME.FAN_CONTROL: {
+        // [mode][effective][reason][target_on][target_pct][dominant][power_state][ftp_w:uint16][cooldown:int8]
+        if (u8.length < off + 10) return;
+        state.fanControl = {
+          mode: u8[off],
+          effective: u8[off + 1],
+          reason: u8[off + 2],
+          targetOn: u8[off + 3] !== 0,
+          targetPct: u8[off + 4],
+          ftpW: u16(dv, off + 7),
+          cooldown: dv.getInt8(off + 9),
+        };
+        renderFanMode();
         return;
       }
 
@@ -695,6 +863,7 @@
       firmwareProgress: state.firmwareProgress,
       discovery: { ...state.discovery },
     }),
+    getFanControl: () => state.fanControl,
 
     // WS control
     wsConnect: connectWS,
@@ -726,8 +895,9 @@
 
   // Start WS on DOM ready
   if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", connectWS);
+    document.addEventListener("DOMContentLoaded", () => { initFanMode(); connectWS(); });
   } else {
+    initFanMode();
     connectWS();
   }
 
@@ -2527,7 +2697,7 @@ window.startRebootMonitoring = function (options) {
     
     card.innerHTML = `
       <div class="fan-art">
-        <svg xmlns="http://www.w3.org/2000/svg" width="114" height="114" fill="none" viewBox="0 0 114 114"><g id="FanBlades-${token.substring(0, 8)}"><path fill="#b5b5b5" d="M103.212 61.865c-3.686-2.379-7.473-4.406-11.477-6.243-2.873-1.319-5.705-2.327-8.737-3.254-3.378-1.032-6.716-1.657-10.22-2.032-1.878-.203-3.647-.367-5.518-.312-.055 0-.086-.027-.13-.04a.53.53 0 0 1 .21-.206c9.809-5.29 20.306-7.118 31.325-7.453 1.15-.035 2.127-.604 2.716-1.629.455-.795.489-1.831.114-2.851-1.718-4.663-4.262-8.909-7.466-12.722-1.099-1.308-2.73-1.81-4.36-1.263-4.16 1.398-8.105 3.096-12.038 5.08-2.823 1.425-5.376 3.01-7.991 4.802-2.915 1.998-5.483 4.218-7.961 6.722-1.33 1.342-2.562 2.623-3.685 4.12a.5.5 0 0 1-.105.1.52.52 0 0 1-.037-.317c1.981-10.965 7.096-20.315 13.704-29.139.69-.92.854-2.039.42-3.138-.337-.85-1.126-1.525-2.16-1.868C65.1 8.658 60.193 8 55.216 8.127c-1.708.044-3.12 1.006-3.707 2.621-1.5 4.124-2.633 8.266-3.533 12.58-.646 3.095-.998 6.08-1.227 9.242-.255 3.523-.12 6.915.292 10.415.22 1.876.454 3.637.923 5.45a.5.5 0 0 1 .014.144.52.52 0 0 1-.27-.169c-7.34-8.386-11.459-18.213-14.238-28.882-.29-1.113-1.062-1.939-2.193-2.285-.876-.266-1.894-.069-2.805.524-4.164 2.711-7.738 6.137-10.742 10.109-1.03 1.362-1.159 3.065-.262 4.531 2.29 3.743 4.822 7.213 7.632 10.605 2.017 2.435 4.13 4.571 6.46 6.722 2.596 2.396 5.333 4.407 8.325 6.266 1.605.997 3.127 1.913 4.837 2.676.05.023.066.062.1.092a.53.53 0 0 1-.28.094c-11.131.51-21.382-2.397-31.456-6.876-1.05-.467-2.178-.38-3.153.29-.755.518-1.237 1.438-1.341 2.521-.476 4.946-.025 9.876 1.207 14.7.422 1.657 1.674 2.817 3.38 3.03 4.354.545 8.645.728 13.05.646 3.162-.06 6.149-.38 9.284-.86 3.491-.535 6.769-1.422 10.088-2.602 1.78-.633 3.446-1.253 5.107-2.114a.5.5 0 0 1 .139-.046.5.5 0 0 1-.105.302c-6.54 9.02-15.206 15.224-24.988 20.307-1.021.53-1.656 1.467-1.74 2.646-.066.914.352 1.863 1.135 2.62 3.571 3.455 7.706 6.177 12.246 8.221 1.558.702 3.246.446 4.476-.753 3.14-3.065 5.96-6.306 8.64-9.8 1.927-2.508 3.537-5.044 5.118-7.795 1.758-3.063 3.11-6.178 4.257-9.51.615-1.787 1.168-3.475 1.531-5.31.01-.05.043-.07.062-.109a.5.5 0 0 1 .16.242c2.974 10.739 2.42 21.382.296 32.199-.222 1.128.114 2.209.982 3.009.673.621 1.677.887 2.755.746 4.928-.637 9.635-2.172 14.064-4.447 1.52-.78 2.373-2.26 2.202-3.97-.439-4.366-1.215-8.59-2.274-12.866-.761-3.07-1.739-5.911-2.905-8.86-1.298-3.285-2.892-6.282-4.782-9.257-1.013-1.594-1.987-3.08-3.196-4.51a.5.5 0 0 1-.075-.124.53.53 0 0 1 .319.034c10.25 4.37 18.226 11.439 25.358 19.843.744.877 1.798 1.288 2.967 1.108.904-.14 1.737-.759 2.3-1.69 2.574-4.25 4.308-8.887 5.293-13.77.338-1.674-.288-3.264-1.732-4.196v.003zm-46.283-4.819-.08-.085.017-.116.102-.06.11.044.035.112-.066.097-.116.01z"/><path stroke="#d8d8d8" stroke-miterlimit="10" d="M6.376 57.001h100.699M6.888 64.166l99.675-14.33M8.415 71.186l96.621-28.37M10.926 77.917l91.599-41.832M14.368 84.222 99.083 29.78M18.674 89.973l76.103-65.944M23.754 95.053l65.943-76.104M29.505 99.358l54.442-84.714M35.81 102.801l41.832-91.6M42.54 105.311l28.37-96.62M49.56 106.839 63.89 7.163M56.726 107.351V6.651M63.89 106.839 49.56 7.163M70.91 105.311 42.54 8.691M77.642 102.801l-41.833-91.6M83.947 99.358 29.505 14.644M89.697 95.053 23.754 18.949M94.777 89.973 18.674 24.029M99.083 84.222 14.368 29.78M102.525 77.917l-91.6-41.832M105.036 71.186l-96.62-28.37M106.563 64.166 6.888 49.836M82.849 55.133l24.386-1.743M6.216 60.612l24.426-1.745M82.318 51.435l23.889-5.196M7.244 67.763l23.93-5.205M81.265 47.851l22.908-8.542M9.278 74.693l22.946-8.556M79.714 44.452l21.459-11.714M12.278 81.264l21.495-11.733M77.694 41.31l19.574-14.65M16.183 87.342l19.606-14.673M75.248 38.485 92.538 21.2M20.912 92.802l17.32-17.314M72.425 36.038 87.08 16.469M26.37 97.533l14.68-19.601M69.283 34.017l11.722-21.455M32.446 101.44l11.742-21.49M65.884 32.465 74.435 9.56M39.016 104.442 47.58 81.5M62.3 31.41l5.204-23.888M45.947 106.48l5.212-23.929M58.603 30.878l1.752-24.386M53.096 107.51l1.755-24.427M54.867 30.877 53.132 6.49M60.32 107.512 58.58 83.084M51.168 31.407 45.981 7.515M67.47 106.487l-5.196-23.931M47.583 32.458 39.05 9.548M74.402 104.454l-8.548-22.948M44.185 34.008 32.477 12.546M80.974 101.456 69.247 79.958M41.04 36.027 26.4 16.447M87.052 97.555 72.386 77.942M38.216 38.472 20.937 21.175M92.514 92.827 75.206 75.502M35.768 41.294 16.203 26.632M97.248 87.37 77.65 72.683M33.746 44.435l-21.45-11.729M101.156 81.296 79.669 69.547M32.192 47.834 9.291 39.275M104.16 74.727l-22.94-8.573M31.137 51.418 7.251 46.205M106.2 67.797l-23.926-5.221M30.603 55.115 6.218 53.354M107.233 60.648l-24.425-1.764"/></g><path stroke="#d8d8d8" stroke-linecap="round" stroke-linejoin="round" d="M56.726 83.554c14.418 0 26.106-11.688 26.106-26.106S71.144 31.342 56.726 31.342 30.618 43.03 30.618 57.448s11.688 26.106 26.106 26.106"/><path fill="#fffdfd" d="M56.5 69C62.851 69 68 63.851 68 57.5S62.851 46 56.5 46 45 51.149 45 57.5 50.149 69 56.5 69"/><path stroke="url(#paint0_linear_477_2350_${token.substring(0, 8)})" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M57 113c30.928 0 56-25.072 56-56S87.928 1 57 1 1 26.072 1 57s25.072 56 56 56"/><path stroke="#e6e6e6" stroke-linecap="round" stroke-linejoin="round" d="M57 110.255c29.412 0 53.255-23.843 53.255-53.255S86.412 3.745 57 3.745 3.745 27.588 3.745 57 27.588 110.255 57 110.255"/><path stroke="#e0e0e0" stroke-linecap="round" stroke-linejoin="round" d="M57 107.367c27.896 0 50.51-22.614 50.51-50.51S84.896 6.347 57 6.347 6.49 28.961 6.49 56.857s22.614 50.51 50.51 50.51"/><defs><linearGradient id="paint0_linear_477_2350_${token.substring(0, 8)}" x1="57" y1="1" x2="57" y2="113" gradientUnits="userSpaceOnUse"><stop stop-color="#EFEFEF"/><stop offset="1" stop-color="#BABABA"/></linearGradient></defs></svg>
+        <svg xmlns="http://www.w3.org/2000/svg" width="114" height="114" fill="none" viewBox="0 0 114 114"><g id="FanBlades-${token.substring(0, 8)}"><path fill="#b5b5b5" d="M103.212 61.865c-3.686-2.379-7.473-4.406-11.477-6.243-2.873-1.319-5.705-2.327-8.737-3.254-3.378-1.032-6.716-1.657-10.22-2.032-1.878-.203-3.647-.367-5.518-.312-.055 0-.086-.027-.13-.04a.53.53 0 0 1 .21-.206c9.809-5.29 20.306-7.118 31.325-7.453 1.15-.035 2.127-.604 2.716-1.629.455-.795.489-1.831.114-2.851-1.718-4.663-4.262-8.909-7.466-12.722-1.099-1.308-2.73-1.81-4.36-1.263-4.16 1.398-8.105 3.096-12.038 5.08-2.823 1.425-5.376 3.01-7.991 4.802-2.915 1.998-5.483 4.218-7.961 6.722-1.33 1.342-2.562 2.623-3.685 4.12a.5.5 0 0 1-.105.1.52.52 0 0 1-.037-.317c1.981-10.965 7.096-20.315 13.704-29.139.69-.92.854-2.039.42-3.138-.337-.85-1.126-1.525-2.16-1.868C65.1 8.658 60.193 8 55.216 8.127c-1.708.044-3.12 1.006-3.707 2.621-1.5 4.124-2.633 8.266-3.533 12.58-.646 3.095-.998 6.08-1.227 9.242-.255 3.523-.12 6.915.292 10.415.22 1.876.454 3.637.923 5.45a.5.5 0 0 1 .014.144.52.52 0 0 1-.27-.169c-7.34-8.386-11.459-18.213-14.238-28.882-.29-1.113-1.062-1.939-2.193-2.285-.876-.266-1.894-.069-2.805.524-4.164 2.711-7.738 6.137-10.742 10.109-1.03 1.362-1.159 3.065-.262 4.531 2.29 3.743 4.822 7.213 7.632 10.605 2.017 2.435 4.13 4.571 6.46 6.722 2.596 2.396 5.333 4.407 8.325 6.266 1.605.997 3.127 1.913 4.837 2.676.05.023.066.062.1.092a.53.53 0 0 1-.28.094c-11.131.51-21.382-2.397-31.456-6.876-1.05-.467-2.178-.38-3.153.29-.755.518-1.237 1.438-1.341 2.521-.476 4.946-.025 9.876 1.207 14.7.422 1.657 1.674 2.817 3.38 3.03 4.354.545 8.645.728 13.05.646 3.162-.06 6.149-.38 9.284-.86 3.491-.535 6.769-1.422 10.088-2.602 1.78-.633 3.446-1.253 5.107-2.114a.5.5 0 0 1 .139-.046.5.5 0 0 1-.105.302c-6.54 9.02-15.206 15.224-24.988 20.307-1.021.53-1.656 1.467-1.74 2.646-.066.914.352 1.863 1.135 2.62 3.571 3.455 7.706 6.177 12.246 8.221 1.558.702 3.246.446 4.476-.753 3.14-3.065 5.96-6.306 8.64-9.8 1.927-2.508 3.537-5.044 5.118-7.795 1.758-3.063 3.11-6.178 4.257-9.51.615-1.787 1.168-3.475 1.531-5.31.01-.05.043-.07.062-.109a.5.5 0 0 1 .16.242c2.974 10.739 2.42 21.382.296 32.199-.222 1.128.114 2.209.982 3.009.673.621 1.677.887 2.755.746 4.928-.637 9.635-2.172 14.064-4.447 1.52-.78 2.373-2.26 2.202-3.97-.439-4.366-1.215-8.59-2.274-12.866-.761-3.07-1.739-5.911-2.905-8.86-1.298-3.285-2.892-6.282-4.782-9.257-1.013-1.594-1.987-3.08-3.196-4.51a.5.5 0 0 1-.075-.124.53.53 0 0 1 .319.034c10.25 4.37 18.226 11.439 25.358 19.843.744.877 1.798 1.288 2.967 1.108.904-.14 1.737-.759 2.3-1.69 2.574-4.25 4.308-8.887 5.293-13.77.338-1.674-.288-3.264-1.732-4.196v.003zm-46.283-4.819-.08-.085.017-.116.102-.06.11.044.035.112-.066.097-.116.01z"/></g><path stroke="#d8d8d8" stroke-miterlimit="10" d="M6.376 57.001h100.699M6.888 64.166l99.675-14.33M8.415 71.186l96.621-28.37M10.926 77.917l91.599-41.832M14.368 84.222 99.083 29.78M18.674 89.973l76.103-65.944M23.754 95.053l65.943-76.104M29.505 99.358l54.442-84.714M35.81 102.801l41.832-91.6M42.54 105.311l28.37-96.62M49.56 106.839 63.89 7.163M56.726 107.351V6.651M63.89 106.839 49.56 7.163M70.91 105.311 42.54 8.691M77.642 102.801l-41.833-91.6M83.947 99.358 29.505 14.644M89.697 95.053 23.754 18.949M94.777 89.973 18.674 24.029M99.083 84.222 14.368 29.78M102.525 77.917l-91.6-41.832M105.036 71.186l-96.62-28.37M106.563 64.166 6.888 49.836M82.849 55.133l24.386-1.743M6.216 60.612l24.426-1.745M82.318 51.435l23.889-5.196M7.244 67.763l23.93-5.205M81.265 47.851l22.908-8.542M9.278 74.693l22.946-8.556M79.714 44.452l21.459-11.714M12.278 81.264l21.495-11.733M77.694 41.31l19.574-14.65M16.183 87.342l19.606-14.673M75.248 38.485 92.538 21.2M20.912 92.802l17.32-17.314M72.425 36.038 87.08 16.469M26.37 97.533l14.68-19.601M69.283 34.017l11.722-21.455M32.446 101.44l11.742-21.49M65.884 32.465 74.435 9.56M39.016 104.442 47.58 81.5M62.3 31.41l5.204-23.888M45.947 106.48l5.212-23.929M58.603 30.878l1.752-24.386M53.096 107.51l1.755-24.427M54.867 30.877 53.132 6.49M60.32 107.512 58.58 83.084M51.168 31.407 45.981 7.515M67.47 106.487l-5.196-23.931M47.583 32.458 39.05 9.548M74.402 104.454l-8.548-22.948M44.185 34.008 32.477 12.546M80.974 101.456 69.247 79.958M41.04 36.027 26.4 16.447M87.052 97.555 72.386 77.942M38.216 38.472 20.937 21.175M92.514 92.827 75.206 75.502M35.768 41.294 16.203 26.632M97.248 87.37 77.65 72.683M33.746 44.435l-21.45-11.729M101.156 81.296 79.669 69.547M32.192 47.834 9.291 39.275M104.16 74.727l-22.94-8.573M31.137 51.418 7.251 46.205M106.2 67.797l-23.926-5.221M30.603 55.115 6.218 53.354M107.233 60.648l-24.425-1.764"/><path stroke="#d8d8d8" stroke-linecap="round" stroke-linejoin="round" d="M56.726 83.554c14.418 0 26.106-11.688 26.106-26.106S71.144 31.342 56.726 31.342 30.618 43.03 30.618 57.448s11.688 26.106 26.106 26.106"/><path fill="#fffdfd" d="M56.5 69C62.851 69 68 63.851 68 57.5S62.851 46 56.5 46 45 51.149 45 57.5 50.149 69 56.5 69"/><path stroke="url(#paint0_linear_477_2350_${token.substring(0, 8)})" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M57 113c30.928 0 56-25.072 56-56S87.928 1 57 1 1 26.072 1 57s25.072 56 56 56"/><path stroke="#e6e6e6" stroke-linecap="round" stroke-linejoin="round" d="M57 110.255c29.412 0 53.255-23.843 53.255-53.255S86.412 3.745 57 3.745 3.745 27.588 3.745 57 27.588 110.255 57 110.255"/><path stroke="#e0e0e0" stroke-linecap="round" stroke-linejoin="round" d="M57 107.367c27.896 0 50.51-22.614 50.51-50.51S84.896 6.347 57 6.347 6.49 28.961 6.49 56.857s22.614 50.51 50.51 50.51"/><defs><linearGradient id="paint0_linear_477_2350_${token.substring(0, 8)}" x1="57" y1="1" x2="57" y2="113" gradientUnits="userSpaceOnUse"><stop stop-color="#EFEFEF"/><stop offset="1" stop-color="#BABABA"/></linearGradient></defs></svg>
       </div>
       <div class="fan-meta">
         <label class="${switchClass}">
@@ -3470,7 +3640,11 @@ window.startRebootMonitoring = function (options) {
       const minHR = hrMinEl ? parseInt(hrMinEl.textContent, 10) || 80 : 80;
       const maxHR = hrMaxEl ? parseInt(hrMaxEl.textContent, 10) || 160 : 160;
 
-      const calculatedSpeed = calculateFanSpeed(currentHR, minHR, maxHR);
+      // Device target from FAN_CONTROL; firmware without it: Pure curve computed here
+      const fc = window.ApiV1 && window.ApiV1.getFanControl ? window.ApiV1.getFanControl() : null;
+      const calculatedSpeed = fc
+        ? (fc.targetOn ? fc.targetPct : 0)
+        : calculateFanSpeed(currentHR, minHR, maxHR);
 
       // Update each fan animation
       let hasActiveFans = false;

@@ -46,6 +46,10 @@
  * BIKE_METRICS (0x0D) - Delta (and once per client on connect):
  *   [power_w:int16][cadence_rpm:uint16][flags:uint8]   (hw::BikeMetrics, BikeMetrics.h)
  *   flags: bit0 power valid, bit1 cadence valid, bit2 cadence from power meter
+ *
+ * FAN_CONTROL (0x0E) - Delta (and on connect), HW_ENABLE_FAN_POWER_MODE only:
+ *   [mode][effective][reason][target_on][target_pct][dominant][power_state][ftp_w:uint16][cooldown:int8]
+ *   (hw::FanControlStatus, FanControlFrame.h)
  */
 
 #include "WebSocketTelemetry.h"
@@ -72,6 +76,13 @@ extern FanController* g_fanController;
 
 #if HW_ENABLE_NVS
 #include "../core/HeartRateSettings.h"
+#endif
+
+#if HW_ENABLE_FAN_POWER_MODE
+#include "../core/FanHRAdapter.h"
+#include "../core/FanModeSettings.h"
+extern FanHRAdapter* g_fanHrAdapter;
+extern FanModeSettings* g_fanModeSettings;
 #endif
 
 #if HW_ENABLE_DISPLAY
@@ -265,7 +276,7 @@ void WebSocketTelemetry::loopFlush() {
     
 #if HW_TELEMETRY_DIAG_PRINT_FRAME_LIST
     if (builtMask != 0) {
-      static const char* kFrameNames[13] = {
+      static const char* kFrameNames[14] = {
         "SYSTEM_STATUS",
         "SENSORS_SNAPSHOT",
         "SENSOR_CONN_STATE",
@@ -279,11 +290,12 @@ void WebSocketTelemetry::loopFlush() {
         "HEART_RATE_SETTINGS",
         nullptr,  // 0x0C CLIENT_ID: control frame, never marked dirty
         "BIKE_METRICS",
+        "FAN_CONTROL",
       };
       
       HW_DEBUG_PRINT("[TelDiag] built: ");
       bool first = true;
-      for (uint8_t i = 0; i < 13; i++) {
+      for (uint8_t i = 0; i < 14; i++) {
         if ((builtMask & (1U << i)) && kFrameNames[i]) {
           if (!first) HW_DEBUG_PRINT(",");
           HW_DEBUG_PRINT(kFrameNames[i]);
@@ -337,9 +349,9 @@ void WebSocketTelemetry::markDirty(TelemetryFrameType frameType) {
   }
   
   uint8_t frameId = static_cast<uint8_t>(frameType);
-  static_assert(static_cast<uint8_t>(TelemetryFrameType::BIKE_METRICS) <= 16, "dirtyFlags is 16 bits");
-  if (frameId >= 1 && frameId <= static_cast<uint8_t>(TelemetryFrameType::BIKE_METRICS)) {
-    dirtyFlags.fetch_or(static_cast<uint16_t>(1U << (frameId - 1))); // Frame IDs are 1-13, bitfield uses 0-12
+  static_assert(static_cast<uint8_t>(TelemetryFrameType::FAN_CONTROL) <= 16, "dirtyFlags is 16 bits");
+  if (frameId >= 1 && frameId <= static_cast<uint8_t>(TelemetryFrameType::FAN_CONTROL)) {
+    dirtyFlags.fetch_or(static_cast<uint16_t>(1U << (frameId - 1))); // Frame IDs are 1-14, bitfield uses 0-13
   }
 }
 
@@ -434,6 +446,9 @@ void WebSocketTelemetry::onWebSocketEvent(AsyncWebSocket* server, AsyncWebSocket
       g_telemetryInstance->markDirty(TelemetryFrameType::SYSTEM_STATUS);
       g_telemetryInstance->markDirty(TelemetryFrameType::FIRMWARE_VERSION);
       g_telemetryInstance->markDirty(TelemetryFrameType::HEART_RATE_SETTINGS);
+#if HW_ENABLE_FAN_POWER_MODE
+      g_telemetryInstance->markDirty(TelemetryFrameType::FAN_CONTROL);
+#endif
 
       // IMPORTANT (heap stability): only push heavy snapshots on the FIRST client connect.
       // Repeated connect/disconnect churn while WS already has another active client
@@ -539,6 +554,9 @@ void WebSocketTelemetry::emitFrameToClient(uint32_t clientId, TelemetryFrameType
     case TelemetryFrameType::BIKE_METRICS:
       payloadLen = buildBikeMetrics(frameBuffer + 1, MAX_FRAME_SIZE - 1);
       break;
+    case TelemetryFrameType::FAN_CONTROL:
+      payloadLen = buildFanControl(frameBuffer + 1, MAX_FRAME_SIZE - 1);
+      break;
     default:
       payloadLen = 0;
       break;
@@ -597,6 +615,9 @@ void WebSocketTelemetry::emitFrame(TelemetryFrameType frameType) {
       break;
     case TelemetryFrameType::BIKE_METRICS:
       payloadLen = buildBikeMetrics(frameBuffer + 1, MAX_FRAME_SIZE - 1);
+      break;
+    case TelemetryFrameType::FAN_CONTROL:
+      payloadLen = buildFanControl(frameBuffer + 1, MAX_FRAME_SIZE - 1);
       break;
     default:
       return; // Unknown frame type
@@ -1146,6 +1167,30 @@ size_t WebSocketTelemetry::buildBikeMetrics(uint8_t* buffer, size_t bufferSize) 
   // Latched by BLERelayManager::loop() (same task)
   if (g_bleRelayManager && g_bleRelayManager->ready()) {
     return hw::encodeBikeMetrics(g_bleRelayManager->bikeMetrics(), buffer, bufferSize);
+  }
+#else
+  (void)buffer;
+  (void)bufferSize;
+#endif
+  return 0;
+}
+
+size_t WebSocketTelemetry::buildFanControl(uint8_t* buffer, size_t bufferSize) {
+#if HW_ENABLE_FAN_POWER_MODE
+  static_assert(1 + hw::kFanControlPayloadLen <= MAX_FRAME_SIZE, "FAN_CONTROL must fit into one frame");
+  // FanHRAdapter state, written on the loop task like this flush
+  hw::FanControlStatus s;
+  if (g_fanHrAdapter && g_fanHrAdapter->ready() && g_fanHrAdapter->fanControlStatus(s)) {
+    return hw::encodeFanControl(s, buffer, bufferSize);
+  }
+  // Fan control not running yet (fans/BLE still coming up): stored settings only.
+  if (g_fanModeSettings) {
+    s = hw::FanControlStatus{};
+    s.mode = g_fanModeSettings->mode();
+    s.effective = s.mode;
+    s.ftpW = g_fanModeSettings->ftpW();
+    s.cooldown = g_fanModeSettings->cooldown();
+    return hw::encodeFanControl(s, buffer, bufferSize);
   }
 #else
   (void)buffer;

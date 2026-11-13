@@ -193,6 +193,11 @@ void ApiActions::registerRoutes(void* serverPtr) {
   server->on("/api/v1/action/heartrate/setmax", HTTP_POST, [](AsyncWebServerRequest* req) {
     maintenanceGateWrapper(req, handleHeartRateSetMax);
   });
+#if HW_ENABLE_FAN_POWER_MODE
+  server->on("/api/v1/action/fanmode/set", HTTP_POST, [](AsyncWebServerRequest* req) {
+    maintenanceGateWrapper(req, handleFanModeSet);
+  });
+#endif
   
   // Telemetry refresh (gated via wrapper)
   server->on("/api/v1/action/telemetry/refresh", HTTP_POST, [](AsyncWebServerRequest* req) {
@@ -1385,6 +1390,99 @@ void ApiActions::handleHeartRateSetMax(AsyncWebServerRequest* request) {
   }
 }
 
+#if HW_ENABLE_FAN_POWER_MODE
+#include "../core/FanModeSettings.h"
+extern FanModeSettings* g_fanModeSettings;
+
+static bool sensorConfigured(BikeSensor::SensorType type) {
+  BikeSensor::SensorInfo info;
+  return BikeSensor::info(type, info) && info.state != BikeSensor::SlotState::EMPTY;
+}
+
+// mode: pure|smart|hybrid, ftp: watts (clamped to 100..500), cooldown: -2..2; all optional,
+// applied together.
+// Values are read back through the FAN_CONTROL frame.
+void ApiActions::handleFanModeSet(AsyncWebServerRequest* request) {
+  if (!checkSystemReady()) {
+    sendError(request, 503, "System not ready");
+    return;
+  }
+  if (!g_fanModeSettings || !g_heartRateSettings) {
+    sendError(request, 503, "Fan mode settings not available");
+    return;
+  }
+
+  char modeBuf[16];
+  const bool setMode = WebHelpers::getParamToBuffer(request, "mode", modeBuf, sizeof(modeBuf));
+  uint8_t mode = 0;
+  if (setMode) {
+    if (strcasecmp(modeBuf, "pure") == 0) {
+      mode = static_cast<uint8_t>(hw::FanMode::Pure);
+    } else if (strcasecmp(modeBuf, "smart") == 0) {
+      mode = static_cast<uint8_t>(hw::FanMode::Smart);
+    } else if (strcasecmp(modeBuf, "hybrid") == 0) {
+      mode = static_cast<uint8_t>(hw::FanMode::Hybrid);
+    } else {
+      sendError(request, 400, "Invalid mode");
+      return;
+    }
+  }
+
+  const bool setFtp = request->hasParam("ftp", true) || request->hasParam("ftp");
+  int ftp = 0;
+  if (setFtp && !getIntParam(request, "ftp", ftp, true)) {
+    return;
+  }
+  if (setFtp && (ftp < 0 || ftp > 65535)) {
+    sendError(request, 400, "Invalid ftp");
+    return;
+  }
+  const bool setCooldown = request->hasParam("cooldown", true) || request->hasParam("cooldown");
+  int cooldown = 0;
+  if (setCooldown && !getIntParam(request, "cooldown", cooldown, true)) {
+    return;
+  }
+  if (setCooldown && !hw::fanCooldownValid(cooldown)) {
+    sendError(request, 400, "Invalid cooldown");
+    return;
+  }
+  if (!setMode && !setFtp && !setCooldown) {
+    sendError(request, 400, "mode, ftp or cooldown required");
+    return;
+  }
+
+  if (setMode && mode == static_cast<uint8_t>(hw::FanMode::Hybrid)) {
+    // Min/max are loop-task values; a racing change only shifts this check,
+    // FanBlend checks the span again on every loop.
+    const uint16_t minHr = g_heartRateSettings->getMin();
+    const uint16_t maxHr = g_heartRateSettings->getMax();
+    const char* reason = nullptr;
+    if (!sensorConfigured(BikeSensor::SensorType::HEART_RATE)) {
+      reason = "no_hr_sensor";
+    } else if (!sensorConfigured(BikeSensor::SensorType::POWER)) {
+      reason = "no_power_source";
+    } else if (maxHr <= minHr || maxHr - minHr < hw::kFanMinSpanBpm) {
+      reason = "hr_span_too_small";
+    }
+    if (reason) {
+      char json[64];
+      snprintf(json, sizeof(json), "{\"ok\":false,\"error\":\"%s\"}", reason);
+      sendJSON(request, 409, json);
+      return;
+    }
+  }
+
+  if (g_fanModeSettings->request(setMode, mode, setFtp, static_cast<uint16_t>(ftp), setCooldown,
+                                 static_cast<int8_t>(cooldown))) {
+    sendJSON(request, 200, "{\"ok\":true}");
+  } else if (MaintenanceMode::admissionClosed()) {
+    sendJSON(request, 409, "{\"ok\":false,\"error\":\"maintenance_active\"}");
+  } else {
+    sendError(request, 500, "Failed to set fan mode");
+  }
+}
+#endif // HW_ENABLE_FAN_POWER_MODE
+
 void ApiActions::handleTelemetryRefresh(AsyncWebServerRequest* request) {
   if (!checkSystemReady()) {
     sendError(request, 503, "System not ready");
@@ -1412,6 +1510,9 @@ void ApiActions::handleTelemetryRefresh(AsyncWebServerRequest* request) {
   g_webSocketTelemetry->markDirty(TelemetryFrameType::SYSTEM_STATUS);
   g_webSocketTelemetry->markDirty(TelemetryFrameType::FIRMWARE_VERSION);
   g_webSocketTelemetry->markDirty(TelemetryFrameType::HEART_RATE_SETTINGS);
+#if HW_ENABLE_FAN_POWER_MODE
+  g_webSocketTelemetry->markDirty(TelemetryFrameType::FAN_CONTROL);
+#endif
 
   // If the UI provides its WS client_id (sent via a small WS control frame),
   // unicast heavy snapshots to that specific client even in multi-client scenarios.

@@ -37,6 +37,8 @@ Workspace copies of `HomeWindWSAmoled`, `NimBLE-Arduino` (patched 2.5.2), `Smart
 
 Every successful build refreshes `build/<board>/manifest.json` for ESP Web Tools. `--no-deploy` skips only the website copy. `--clean` deletes the object cache before compiling.
 
+From 1.8.0, release builds enable fan modes Pure / Smart / Hybrid by default (`HW_ENABLE_FAN_POWER_MODE=1` in `Config.h`). `--fan-power` still forces the gate on for a test stamp (build id ends in `-fanpower`) and requires `--no-deploy`. Concept: `docs/FAN_POWER_HR_CONCEPT.md`.
+
 Outputs:
 
 - `build/esp32.esp32.waveshare_esp32_s3_touch_amoled_164/` and `build/esp32.esp32.XIAO_ESP32S3/` — bins, `flash_args`, `manifest.json` (what ESP Web Tools needs)

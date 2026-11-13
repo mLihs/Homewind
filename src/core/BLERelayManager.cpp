@@ -215,6 +215,20 @@ void BLERelayManager::loop() {
   }
   const bool cadenceNew = _cadenceNew;
   _cadenceNew = false;
+#if HW_ENABLE_FANS && HW_ENABLE_FAN_POWER_MODE
+  if (g_fanHrAdapter && (_powerNew || cadenceNew)) {
+    const uint32_t now = millis();
+    uint32_t ageMs = 0;
+    BikeSensor::PowerSample power{};
+    if (_powerNew && BikeSensor::lastPower(power, ageMs)) {
+      g_fanHrAdapter->onPowerSample(power.watts, now - ageMs);
+    }
+    uint16_t rpm = 0;
+    if (cadenceNew && BikeSensor::lastCadence(rpm, ageMs)) {
+      g_fanHrAdapter->onCadenceSample(rpm, now - ageMs);
+    }
+  }
+#endif
   if (_powerNew || cadenceNew || millis() - _bikeMetricsMs >= BIKE_METRICS_POLL_MS) {
     _powerNew = false;
     updateBikeMetrics();
@@ -846,12 +860,12 @@ void BLERelayManager::updateBikeMetrics() {
   }
 #endif
 #if HOMEWIND_ENABLE_WEBSOCKET
-  if (_telemetry) {
+    if (_telemetry) {
     _telemetry->markDirty(TelemetryFrameType::BIKE_METRICS);
-  }
+    }
 #endif
-}
-
+  }
+  
 // =============================================================================
 // Maintenance (loop task)
 // =============================================================================
@@ -997,8 +1011,8 @@ bool BLERelayManager::loadConfigFromNVS() {
   if (len == 0) {
     prefs.end();
     HW_DEBUG_PRINTLN("[BLE] [NVS] No config found in NVS");
-    return false;
-  }
+      return false;
+    }
   const size_t got = len <= sizeof(blob) ? prefs.getBytes(NVS_KEY_DATA, blob, len) : 0;
   prefs.end();
 
@@ -1008,39 +1022,39 @@ bool BLERelayManager::loadConfigFromNVS() {
     HW_ERROR_PRINTF("[BLE] [NVS] ble_data rejected (%u bytes): bad %s\n", static_cast<unsigned>(len),
                     result == hw::BleNvsLoad::BAD_SIZE ? "size"
                     : result == hw::BleNvsLoad::BAD_VERSION ? "version" : "CRC");
-    return false;
-  }
-  
-  if (data.sensorCount > MAX_SENSORS) {
-    HW_DEBUG_PRINTF("[BLE] [NVS] Clamping sensorCount from %u to %u\n", data.sensorCount, MAX_SENSORS);
-    data.sensorCount = MAX_SENSORS;
-  }
-  
-  // Copy data to runtime structures
-  _sensorCount = data.sensorCount;
-  
-  for (uint8_t i = 0; i < _sensorCount; i++) {
-    const hw::BleNvsEntry& entry = data.sensors[i];
-    SensorConfig& cfg = _configuredSensors[i];
+      return false;
+    }
     
+    if (data.sensorCount > MAX_SENSORS) {
+    HW_DEBUG_PRINTF("[BLE] [NVS] Clamping sensorCount from %u to %u\n", data.sensorCount, MAX_SENSORS);
+      data.sensorCount = MAX_SENSORS;
+    }
+    
+    // Copy data to runtime structures
+    _sensorCount = data.sensorCount;
+    
+    for (uint8_t i = 0; i < _sensorCount; i++) {
+    const hw::BleNvsEntry& entry = data.sensors[i];
+      SensorConfig& cfg = _configuredSensors[i];
+      
     copyStr(cfg.name, entry.name, sizeof(cfg.name));
     copyStr(cfg.type, entry.type, sizeof(cfg.type));
     copyStr(cfg.mac, entry.mac, sizeof(cfg.mac));
-    cfg.addrType = entry.addrType;
+      cfg.addrType = entry.addrType;
     cfg.typeBit = stringToTypeBit(cfg.type);
+      
+      HW_DEBUG_PRINTF("[BLE] [NVS] → Loaded sensor %u: %s (%s) addrType=%d\n",
+                     i, cfg.name, cfg.type, cfg.addrType);
+    }
     
-    HW_DEBUG_PRINTF("[BLE] [NVS] → Loaded sensor %u: %s (%s) addrType=%d\n",
-                   i, cfg.name, cfg.type, cfg.addrType);
-  }
-  
-  HW_DEBUG_PRINTF("[BLE] [NVS] ✓ Loaded %u sensor(s) from blob\n", _sensorCount);
+    HW_DEBUG_PRINTF("[BLE] [NVS] ✓ Loaded %u sensor(s) from blob\n", _sensorCount);
   if (result == hw::BleNvsLoad::MIGRATED) {
     HW_DEBUG_PRINTLN("[BLE] [NVS] Migrating ble_data v2 -> v3");
     if (!saveConfigToNVS()) {
       HW_ERROR_PRINTLN("[BLE] [NVS] v3 write failed, v2 stays and migrates again next boot");
     }
   }
-  return true;
+    return true;
 }
 
 /**

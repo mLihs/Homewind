@@ -131,6 +131,7 @@ Settings API for persistent configuration.
 | 0x08 | `FIRMWARE_VERSION` | Firmware version (Delta) |
 | 0x09 | `FIRMWARE_PROGRESS` | Firmware update progress (Delta) |
 | 0x0D | `BIKE_METRICS` | Power and cadence with validity flags (Delta) |
+| 0x0E | `FAN_CONTROL` | Fan mode and acknowledged fan target (Delta; `HW_ENABLE_FAN_POWER_MODE` test firmware only) |
 
 **Behavior**:
 - **Snapshot Frames**: Full state (on connect + periodically every 30s)

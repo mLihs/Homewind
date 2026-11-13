@@ -142,7 +142,28 @@ Total: 5 bytes
   - bit 2: cadence comes from the power meter (no CSC sensor is subscribed). Can be set while bit 1 is clear (power meter without crank data yet).
   - bits 3–7: reserved, 0
 
-Sent when the encoded value changes (new power or cadence sample, or a validity change, checked at least once per second), coalesced by the dirty flag like `HEART_RATE`. Sent once per client after connect (staged connect of the first client, and with the unicast snapshots requested by `telemetry/refresh?client_id=`). Fan control uses heart rate only.
+Sent when the encoded value changes (new power or cadence sample, or a validity change, checked at least once per second), coalesced by the dirty flag like `HEART_RATE`. Sent once per client after connect (staged connect of the first client, and with the unicast snapshots requested by `telemetry/refresh?client_id=`). In the release firmware, fan control uses heart rate only; see `FAN_CONTROL` for the Smart/Hybrid test firmware.
+
+#### FAN_CONTROL (0x0E) - Fan Mode and Target (test firmware only)
+
+Only in firmware built with `HW_ENABLE_FAN_POWER_MODE=1` (`tools/build.sh --fan-power`); concept `docs/FAN_POWER_HR_CONCEPT.md` §5. Encoded by `hw::encodeFanControl()` (`src/core/FanControlFrame.h`).
+
+**Payload:**
+```
+[mode:uint8][effective:uint8][reason:uint8][target_on:uint8][target_pct:uint8][dominant:uint8][power_state:uint8][ftp_w:uint16][cooldown:int8]
+```
+Total: 10 bytes
+
+- `mode`: stored mode (0 = Pure, 1 = Smart, 2 = Hybrid)
+- `effective`: mode in effect; Hybrid runs as 1 = Smart without a configured power source or a fresh power sample, or with an HR span < 30 bpm
+- `reason`: why `effective` differs from `mode`: 0 = none, 1 = no power, 2 = HR span < 30 bpm
+- `target_on`, `target_pct`: FanHRAdapter's per-fan state (ON and speed from the fans' acknowledgements, OFF assumed when sent), highest speed over the fans that are ON (0..95); `target_pct` is 0 while off and until the first speed acknowledgement after ON
+- `dominant`: 0 = HR, 1 = power, 2 = hold (the fall-rate limit holds the output), 3 = fail-safe
+- `power_state`: 0 = none (stale, not connected or not configured), 1 = idle, 2 = pedalling (> 30 W or cadence)
+- `ftp_w`: stored FTP in watts (little-endian)
+- `cooldown`: stored cool-down, signed −2..+2 (0 = default); sets the fall rate in Smart and Hybrid to 30 / 25 / 20 / 15 / 10 % of full scale per minute
+
+Sent when the status changes, at most once per 3 s (a mode, FTP or cool-down change at once), on client connect and on `telemetry/refresh`. Before fan control runs (fans and BLE still starting), only `mode`, `effective` = `mode`, `ftp_w` and `cooldown` are set; receiving the frame at all means the firmware supports the fan modes. The WebUI shows the mode selector and FTP in the heart rate card from the first frame on and animates the fans from `target_on`/`target_pct`; without the frame it keeps the client-side Pure curve.
 
 #### DISCOVERY_STATUS (0x04) - Discovery State Change
 

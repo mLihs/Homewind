@@ -302,6 +302,33 @@ Remove a fan from configuration.
 
 ---
 
+### Fan Mode Actions (test firmware only)
+
+Only in firmware built with `HW_ENABLE_FAN_POWER_MODE=1` (`tools/build.sh --fan-power`); concept `docs/FAN_POWER_HR_CONCEPT.md` §4–5. Routes under `action/fan/` stay reserved for fan devices.
+
+#### Set Fan Mode
+```
+POST /api/v1/action/fanmode/set?mode=<pure|smart|hybrid>&ftp=<watts>&cooldown=<-2..2>
+```
+Set the fan control mode, the FTP used by Hybrid and the cool-down of Smart and Hybrid. All parameters are optional (at least one is required) and are applied together. The handler only queues the change; the main loop applies it and writes the NVS entry `fan_mode`. Values are read back through the `FAN_CONTROL` WebSocket frame.
+
+**Parameters**:
+- `mode` (optional): `pure` (default, heart rate as in 1.7.1), `smart`, or `hybrid` (case-insensitive)
+- `ftp` (optional): FTP in watts, clamped to 100–500 (default 200)
+- `cooldown` (optional): integer −2..2 (default 0); how fast the fans get quieter after an effort: −2 = 30 % of full scale per minute (shorter) … 0 = 20 % … +2 = 10 % (longer); the WebUI shows −2 … +2 as XS, S, M, L, XL
+
+**Response**: `200` `{"ok":true}`
+
+**Status Codes**:
+- `200 OK`: Change queued
+- `400 Bad Request`: Invalid `mode`, `ftp` or `cooldown`, or none given
+- `409 Conflict`: `mode=hybrid` without its preconditions, body `{"ok":false,"error":"no_hr_sensor"}`, `"no_power_source"` or `"hr_span_too_small"` (max HR − min HR < 30 bpm); or `{"ok":false,"error":"maintenance_active"}`
+- `503 Service Unavailable`: System not ready or settings not available
+
+**Note**: The sensors only need to be configured, not connected. If a precondition is lost later, the stored mode stays Hybrid and the fans run as Smart until it is back (`FAN_CONTROL` `effective`/`reason`).
+
+---
+
 ### Firmware Actions
 
 #### Search for Firmware
@@ -615,6 +642,7 @@ Sent only when state changes (marked dirty).
 | `FIRMWARE_SEARCH_RESULT` | `0x0A` | Firmware search result | `[has_update:uint8][version_len:uint8][version:bytes][notes_len:uint16][notes:bytes]` |
 | `HEART_RATE_SETTINGS` | `0x0B` | Heart rate min/max settings | `[min:uint16][max:uint16]` |
 | `BIKE_METRICS` | `0x0D` | Power and cadence | `[power_w:int16][cadence_rpm:uint16][flags:uint8]` |
+| `FAN_CONTROL` | `0x0E` | Fan mode and target (test firmware only) | `[mode][effective][reason][target_on][target_pct][dominant][power_state][ftp_w:uint16][cooldown:int8]` |
 
 ---
 
@@ -781,6 +809,27 @@ const connected = frame[13];
 ```
 
 **Sent**: When the encoded value changes (power/cadence sample or validity change, checked at least once per second), and once per client after connect. Cadence source: the CSC sensor while it is connected, otherwise the power meter. A value older than 3 s (power: last packet; cadence: last crank event or CSC packet) is sent as 0 with its valid bit set. Details: `src/web/WEBSOCKET_PROTOCOL.md`.
+
+---
+
+#### FAN_CONTROL (0x0E) (test firmware only)
+
+**Status**: Only with `HW_ENABLE_FAN_POWER_MODE=1`. Built from `FanHRAdapter::fanControlStatus()`, encoded by `hw::encodeFanControl()` (`src/core/FanControlFrame.h`)
+
+**Payload** (10 bytes):
+```
+[mode:uint8]              // stored mode: 0 Pure, 1 Smart, 2 Hybrid
+[effective:uint8]         // mode in effect (Hybrid can run as 1 Smart)
+[reason:uint8]            // why effective != mode: 0 none, 1 no power, 2 HR span < 30 bpm
+[target_on:uint8]         // 0 OFF, 1 ON (FanHRAdapter's per-fan state)
+[target_pct:uint8]        // speed last acknowledged, 0..95; 0 while OFF and until the first speed acknowledgement after ON
+[dominant:uint8]          // 0 HR, 1 power, 2 hold (fall-rate limit), 3 fail-safe
+[power_state:uint8]       // 0 none, 1 idle, 2 pedalling
+[ftp_w:uint16]            // stored FTP in watts (little-endian)
+[cooldown:int8]           // stored cool-down -2..+2, 0 default
+```
+
+**Sent**: On change, at most once per 3 s (a mode, FTP or cool-down change at once), on client connect and on `telemetry/refresh`. Before fan control runs (fans and BLE still starting), only `mode`, `effective` = `mode`, `ftp_w` and `cooldown` are set. Details: `src/web/WEBSOCKET_PROTOCOL.md`.
 
 ---
 

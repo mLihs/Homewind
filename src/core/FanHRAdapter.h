@@ -19,6 +19,10 @@
 
 #include <Arduino.h>
 #include <SmartMiFanAsync.h>
+#if HW_ENABLE_FAN_POWER_MODE
+#include "FanBlend.h"
+#include "FanControlFrame.h"
+#endif
 
 // Forward declarations
 class FanController;
@@ -28,6 +32,7 @@ class HeartRateSettings;
 #define FANHR_SMOOTH_N 5              // Ring buffer size for HR smoothing
 #define SPEED_DEADBAND_PERCENT 3       // Minimum speed change to trigger update (%)
 #define FANHR_UPDATE_INTERVAL_MS 3000  // Default throttle interval (ms)
+#define FANHR_FAILSAFE_REASSERT_MS 10000  // One fail-safe OFF re-assert after this delay (ms)
 #define HR_PLAUSIBLE_MIN 30            // Minimum plausible HR (bpm)
 #define HR_PLAUSIBLE_MAX 250           // Maximum plausible HR (bpm)
 
@@ -106,6 +111,21 @@ public:
    * @param nowMs Current timestamp (millis())
    */
   void onHeartRateDisconnected(uint32_t nowMs);
+
+#if HW_ENABLE_FAN_POWER_MODE
+  /**
+   * Power/cadence input (loop task): once per new packet, equal values included.
+   * @param sampleMs packet time (millis() - ageMs)
+   */
+  void onPowerSample(int32_t watts, uint32_t sampleMs);
+  void onCadenceSample(uint16_t rpm, uint32_t sampleMs);
+
+  /** Loop task: the FAN_CONTROL status last marked for sending; false before the first. */
+  bool fanControlStatus(hw::FanControlStatus& out) const {
+    out = _reported;
+    return _reportedValid;
+  }
+#endif
   
   /**
    * Main control loop (call from App::loop())
@@ -175,6 +195,29 @@ private:
   uint8_t _powerSeq;
   uint8_t _speedSeq;
   uint8_t _pendingSpeedPct;
+
+  // Pure fail-safe state (applyControl)
+  bool _lastHrValidState;
+  bool _pureEverHadHr;
+  bool _reassertPending;
+  bool _reassertSent;
+  uint32_t _disconnectAtMs;
+
+#if HW_ENABLE_FAN_POWER_MODE
+  // Smart/Hybrid (docs/FAN_POWER_HR_CONCEPT.md); Pure keeps the path above.
+  hw::FanBlend _blend;
+  hw::FanBlendOutput _blendOut;
+  hw::FanMode _fanMode = hw::FanMode::Pure;
+  uint32_t _powerSampleMs = 0;
+  bool _powerSampleValid = false;
+  bool _everHadHr = false;        // an HR sample was accepted since boot
+  bool _switchedOn = false;       // last power command accepted from here was ON
+  bool _blendReassertPending = false;
+  uint32_t _blendFailsafeMs = 0;
+  hw::FanControlStatus _reported;  // last status marked for FAN_CONTROL
+  uint32_t _reportedMs = 0;
+  bool _reportedValid = false;
+#endif
   
   // Internal methods
   void clearHrBuffer();
@@ -182,7 +225,15 @@ private:
   uint16_t computeSmoothedHr() const;
   void updateGlobalTarget();
   void applyControl(uint32_t nowMs);
+  void sendTargets(uint32_t nowMs);
   bool isPlausibleHr(uint16_t hr) const;
+#if HW_ENABLE_FAN_POWER_MODE
+  bool blendLoop(uint32_t nowMs);  // true: Smart/Hybrid handled this loop
+  bool powerOffAll();  // false if the library rejected the command
+  void lastSent(bool& on, uint8_t& pct) const;  // over fans with power ON acknowledged
+  hw::FanControlStatus currentStatus() const;
+  void reportStatus(uint32_t nowMs);
+#endif
 };
 
 #endif // HW_ENABLE_FANS && HW_ENABLE_BLE

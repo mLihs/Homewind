@@ -26,6 +26,16 @@
 // Include SmartMiFanAsync for participation state
 #include <SmartMiFanAsync.h>
 
+#if HW_ENABLE_FAN_POWER_MODE
+#include <BikeSensor.h>
+#include "../core/FanModeSettings.h"
+extern FanModeSettings* g_fanModeSettings;
+#if HOMEWIND_ENABLE_WEBSOCKET
+#include "../web/WebSocketTelemetry.h"
+extern WebSocketTelemetry* g_webSocketTelemetry;
+#endif
+#endif
+
 FanHRAdapter::FanHRAdapter()
   : _initialized(false)
   , _stopped(false)
@@ -46,6 +56,11 @@ FanHRAdapter::FanHRAdapter()
   , _powerSeq(0)
   , _speedSeq(0)
   , _pendingSpeedPct(0)
+  , _lastHrValidState(true)
+  , _pureEverHadHr(false)
+  , _reassertPending(false)
+  , _reassertSent(false)
+  , _disconnectAtMs(0)
 {
   clearHrBuffer();
   memset(_lastSentSpeedPct, 0, sizeof(_lastSentSpeedPct));
@@ -97,6 +112,9 @@ void FanHRAdapter::onHeartRateSample(uint16_t hrBpm, uint32_t nowMs) {
   _hrRaw = hrBpm;
   _lastHrMs = nowMs;
   _hrValid = true;
+#if HW_ENABLE_FAN_POWER_MODE
+  _everHadHr = true;
+#endif
   
   // Push to smoothing buffer
   pushHrSample(hrBpm);
@@ -145,6 +163,9 @@ void FanHRAdapter::onPostConnectControlComplete() {
   _lastCommandSentMs = 0;
   _lastControlMs = 0; // allow immediate update
   _postConnectResetPending = true;
+#if HW_ENABLE_FAN_POWER_MODE
+  _switchedOn = false;
+#endif
 
   HW_DEBUG_PRINTF("[FanHRAdapter] Post-connect control complete: reset HR tracking (t=%lums)\n",
                   (unsigned long)millis());
@@ -182,6 +203,12 @@ void FanHRAdapter::loop(uint32_t nowMs) {
   if (_stopped || !_initialized || !_fanController || !_fanController->ready()) {
     return;
   }
+
+#if HW_ENABLE_FAN_POWER_MODE
+  if (blendLoop(nowMs)) {
+    return;
+  }
+#endif
   
   // OPTIMIZATION: If HR sensor not connected, skip expensive calculations
   // Only periodic fail-safe check: re-assert fans OFF every 5s (handles edge cases)
@@ -376,21 +403,14 @@ void FanHRAdapter::updateGlobalTarget() {
 }
 
 void FanHRAdapter::applyControl(uint32_t nowMs) {
-  // Track HR valid state changes to avoid repeated logging and command sending
-  static bool lastHrValidState = true;
-  static bool everHadHr = false;
-  static bool reassertPending = false;
-  static bool reassertSent = false;
-  static uint32_t disconnectAtMs = 0;
-  
   // OPTIMIZATION: If HR disconnected, handle fail-safe immediately without expensive fan discovery
   if (!_hrValid) {
     // Only enforce fail-safe OFF when we actually lost HR (was connected before).
     // This avoids constantly shutting down fans that are used in Smart Home mode
     // when Homewind is running but no HR sensor is connected.
-    if (lastHrValidState != _hrValid) {
-      lastHrValidState = _hrValid; // now disconnected
-      if (everHadHr) {
+    if (_lastHrValidState != _hrValid) {
+      _lastHrValidState = _hrValid; // now disconnected
+      if (_pureEverHadHr) {
         HW_DEBUG_PRINTLN("[FanHRAdapter] HR disconnected: turning off fans (fail-safe)");
         const CmdAccept acc = SmartMiFan::setPowerAll(false);
         if (acc.result != CmdResult::REJECTED) {
@@ -399,43 +419,53 @@ void FanHRAdapter::applyControl(uint32_t nowMs) {
             _lastSentSpeedPct[i] = 0;
             _lastSentPowerOn[i] = false;
           }
+#if HW_ENABLE_FAN_POWER_MODE
+          _switchedOn = false;
+#endif
         }
         // Schedule exactly one re-assert after 10 seconds
-        reassertPending = true;
-        reassertSent = false;
-        disconnectAtMs = nowMs;
+        _reassertPending = true;
+        _reassertSent = false;
+        _disconnectAtMs = nowMs;
       } else {
         // HR was never connected since boot → don't touch fans
-        reassertPending = false;
-        reassertSent = false;
-        disconnectAtMs = 0;
+        _reassertPending = false;
+        _reassertSent = false;
+        _disconnectAtMs = 0;
       }
-    } else if (reassertPending && !reassertSent) {
-      const uint32_t FAILSAFE_REASSERT_DELAY_MS = 10000;
-      if (nowMs - disconnectAtMs >= FAILSAFE_REASSERT_DELAY_MS) {
+    } else if (_reassertPending && !_reassertSent) {
+      if (nowMs - _disconnectAtMs >= FANHR_FAILSAFE_REASSERT_MS) {
         const CmdAccept acc = SmartMiFan::setPowerAll(false);
         if (acc.result != CmdResult::REJECTED) {
           _powerSeq = acc.seq;
-          reassertSent = true;
-          reassertPending = false;
+          _reassertSent = true;
+          _reassertPending = false;
+#if HW_ENABLE_FAN_POWER_MODE
+          _switchedOn = false;
+#endif
         } else {
-          disconnectAtMs = nowMs;
+          _disconnectAtMs = nowMs;
         }
       }
     }
     return;
   }
   
-  // Update the static state tracker when HR becomes valid again
-  if (lastHrValidState != _hrValid) {
-    lastHrValidState = _hrValid;
-    everHadHr = true;
-    reassertPending = false;
-    reassertSent = false;
-    disconnectAtMs = 0;
+  // Update the state tracker when HR becomes valid again
+  if (_lastHrValidState != _hrValid) {
+    _lastHrValidState = _hrValid;
+    _pureEverHadHr = true;
+    _reassertPending = false;
+    _reassertSent = false;
+    _disconnectAtMs = 0;
   }
-  
-  // HR valid: normal operation - get discovered fans (expensive operation)
+
+  sendTargets(nowMs);
+}
+
+// Command stage for the global target (all modes): 3 s tick, deadband, per-fan state.
+void FanHRAdapter::sendTargets(uint32_t nowMs) {
+  // Get discovered fans (expensive operation)
   // Use SmartMiFanAsync as Single Source of Truth for fan state
   const FanMask used = SmartMiFan::used();
   if (used == 0) {
@@ -538,6 +568,9 @@ void FanHRAdapter::applyControl(uint32_t nowMs) {
     const CmdAccept acc = SmartMiFan::setPowerAll(_globalTargetPower);
     if (acc.result != CmdResult::REJECTED) {
       _powerSeq = acc.seq;
+#if HW_ENABLE_FAN_POWER_MODE
+      _switchedOn = _globalTargetPower;
+#endif
     }
   }
   
@@ -610,5 +643,177 @@ void FanHRAdapter::applyControl(uint32_t nowMs) {
 bool FanHRAdapter::isPlausibleHr(uint16_t hr) const {
   return (hr >= HR_PLAUSIBLE_MIN && hr <= HR_PLAUSIBLE_MAX);
 }
+
+#if HW_ENABLE_FAN_POWER_MODE
+
+void FanHRAdapter::onPowerSample(int32_t watts, uint32_t sampleMs) {
+  if (!_initialized || watts < 0 || watts > hw::kFanMaxPlausibleW) {
+    return;
+  }
+  const uint16_t ftp = g_fanModeSettings ? g_fanModeSettings->ftpW() : hw::kFanFtpDefaultW;
+  _blend.onPowerSample(sampleMs, watts, ftp);
+  _powerSampleMs = sampleMs;
+  _powerSampleValid = true;
+}
+
+void FanHRAdapter::onCadenceSample(uint16_t rpm, uint32_t sampleMs) {
+  if (!_initialized) {
+    return;
+  }
+  _blend.onCadence(sampleMs, rpm);
+}
+
+bool FanHRAdapter::powerOffAll() {
+  const CmdAccept acc = SmartMiFan::setPowerAll(false);
+  if (acc.result == CmdResult::REJECTED) {
+    return false;
+  }
+  _powerSeq = acc.seq;
+  _switchedOn = false;
+  for (uint8_t i = 0; i < MAX_FANS; i++) {
+    _lastSentSpeedPct[i] = 0;
+    _lastSentPowerOn[i] = false;
+  }
+  return true;
+}
+
+// Runs every loop in all modes (FanBlend state and power state stay current);
+// returns false in Pure so the 1.7.1 path runs unchanged.
+bool FanHRAdapter::blendLoop(uint32_t nowMs) {
+  const hw::FanMode mode = g_fanModeSettings ? g_fanModeSettings->mode() : hw::FanMode::Pure;
+  if (mode != _fanMode) {
+    if (mode != hw::FanMode::Pure) {
+      bool on = false;
+      uint8_t pct = 0;
+      lastSent(on, pct);
+      _blend.seed(on, pct, HW_FAN_MAX_SPEED_PERCENT);
+    } else {
+      // Pure's fail-safe tracking was idle in Smart/Hybrid: take over the current HR state
+      // so Pure neither misses a later HR loss nor repeats an OFF already sent.
+      _lastHrValidState = _hrValid;
+      _pureEverHadHr = _everHadHr;
+      _reassertPending = false;
+      _reassertSent = false;
+      if (!_hrValid && _switchedOn) {
+        // Pure has no target without HR; fans switched on by Hybrid on power must not keep running.
+        powerOffAll();
+      }
+    }
+    HW_DEBUG_PRINTF("[FanHRAdapter] Fan mode %u -> %u\n", static_cast<unsigned>(_fanMode),
+                    static_cast<unsigned>(mode));
+    _fanMode = mode;
+  }
+
+  if (_powerSampleValid &&
+      static_cast<int32_t>(nowMs - _powerSampleMs) > static_cast<int32_t>(hw::kBikeStaleMs)) {
+    _powerSampleValid = false;
+  }
+  hw::FanBlendInput in;
+  in.mode = mode;
+  in.ftpW = g_fanModeSettings ? g_fanModeSettings->ftpW() : hw::kFanFtpDefaultW;
+  in.minHr = _hrSettings ? _hrSettings->getMin() : 80;
+  in.maxHr = _hrSettings ? _hrSettings->getMax() : 160;
+  in.maxPct = HW_FAN_MAX_SPEED_PERCENT;
+  in.cooldown = g_fanModeSettings ? g_fanModeSettings->cooldown() : 0;
+  in.hrValid = _hrValid && _hrUsed > 0;
+  in.hrUsed = _hrUsed;
+  if (mode == hw::FanMode::Hybrid) {
+    BikeSensor::SensorInfo info;
+    in.powerConfigured = BikeSensor::info(BikeSensor::SensorType::POWER, info) &&
+                         info.state != BikeSensor::SlotState::EMPTY;
+  }
+  in.powerFresh = _powerSampleValid;
+  _blendOut = _blend.update(nowMs, in);
+  // After update(): a mode change is reported at once, with its effective mode.
+  reportStatus(nowMs);
+  if (mode == hw::FanMode::Pure) {
+    return false;
+  }
+
+  if (_blendOut.failsafe) {
+    _globalTargetPower = false;
+    _globalTargetSpeedPct = 0;
+    if (_blendOut.failsafeEntered) {
+      _blendReassertPending = false;
+      // HR lost, no Hybrid presence. OFF also without HR since boot if Homewind switched the fans on.
+      if (_everHadHr || _switchedOn) {
+        HW_DEBUG_PRINTLN("[FanHRAdapter] Fail-safe: turning off fans");
+        powerOffAll();
+        _blendReassertPending = true;
+        _blendFailsafeMs = nowMs;
+      }
+    } else if (_blendReassertPending && nowMs - _blendFailsafeMs >= FANHR_FAILSAFE_REASSERT_MS) {
+      if (powerOffAll()) {
+        _blendReassertPending = false;
+      } else {
+        _blendFailsafeMs = nowMs;
+      }
+    }
+    return true;
+  }
+
+  _blendReassertPending = false;
+  _globalTargetPower = _blendOut.on;
+  _globalTargetSpeedPct = _blendOut.on ? _blendOut.pct : 0;
+  sendTargets(nowMs);
+  return true;
+}
+
+void FanHRAdapter::lastSent(bool& on, uint8_t& pct) const {
+  on = false;
+  pct = 0;
+  for (uint8_t i = 0; i < MAX_FANS; i++) {
+    if (!_lastSentPowerOn[i]) continue;
+    on = true;
+    if (_lastSentSpeedPct[i] > pct) pct = _lastSentSpeedPct[i];
+  }
+}
+
+hw::FanControlStatus FanHRAdapter::currentStatus() const {
+  hw::FanControlStatus s;
+  s.mode = g_fanModeSettings ? g_fanModeSettings->mode() : hw::FanMode::Pure;
+  s.effective = _blendOut.effective;
+  s.reason = _blendOut.reason;
+  lastSent(s.targetOn, s.targetPct);
+  // Pure has no output shaping: the target follows HR or is the fail-safe.
+  if (_fanMode == hw::FanMode::Pure) {
+    s.dominant = _blendOut.failsafe ? hw::FanDominant::Failsafe : hw::FanDominant::Hr;
+  } else {
+    s.dominant = _blendOut.dominant;
+  }
+  s.power = _blendOut.power;
+  s.ftpW = g_fanModeSettings ? g_fanModeSettings->ftpW() : hw::kFanFtpDefaultW;
+  s.cooldown = g_fanModeSettings ? g_fanModeSettings->cooldown() : 0;
+  return s;
+}
+
+// FAN_CONTROL: on change, at most once per 3 s; a setting change at once.
+// The frame encodes _reported, so a client sees exactly the compared status.
+void FanHRAdapter::reportStatus(uint32_t nowMs) {
+#if HOMEWIND_ENABLE_WEBSOCKET
+  if (!g_webSocketTelemetry) {
+    return;
+  }
+  const hw::FanControlStatus s = currentStatus();
+  if (_reportedValid) {
+    if (s == _reported) {
+      return;
+    }
+    const bool settingChanged =
+        s.mode != _reported.mode || s.ftpW != _reported.ftpW || s.cooldown != _reported.cooldown;
+    if (!settingChanged && nowMs - _reportedMs < FANHR_UPDATE_INTERVAL_MS) {
+      return;
+    }
+  }
+  _reported = s;
+  _reportedMs = nowMs;
+  _reportedValid = true;
+  g_webSocketTelemetry->markDirty(TelemetryFrameType::FAN_CONTROL);
+#else
+  (void)nowMs;
+#endif
+}
+
+#endif // HW_ENABLE_FAN_POWER_MODE
 
 #endif // HW_ENABLE_FANS && HW_ENABLE_BLE

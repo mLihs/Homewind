@@ -260,6 +260,196 @@
     color: var(--text-muted);
   }
 
+  /* Fan mode in the HR card (test firmware only; .fanmode set on FAN_CONTROL) */
+  .fanmode-head {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 2;
+    padding: var(--spc-xl);
+  }
+
+  .fanmode-seg {
+    position: relative;
+    display: flex;
+    gap: var(--spc-xs);
+    padding: 3px;
+    border-radius: var(--radius-pill);
+    background: rgba(255, 255, 255, 0.22);
+    border: 1px solid rgba(255, 255, 255, 0.35);
+  }
+
+  /* Sliding thumb; --sel (0..2) is set from FAN_CONTROL */
+  .fanmode-seg::before {
+    content: "";
+    position: absolute;
+    top: 3px;
+    bottom: 3px;
+    left: 3px;
+    width: calc((100% - 6px - 2 * var(--spc-xs)) / 3);
+    border-radius: var(--radius-pill);
+    background: var(--bg-white);
+    transform: translateX(calc(var(--sel, 0) * (100% + var(--spc-xs))));
+    transition: transform var(--transition-smooth);
+  }
+
+  .fanmode-seg button {
+    position: relative;
+    flex: 1;
+    height: 34px;
+    border: none;
+    border-radius: var(--radius-pill);
+    background: transparent;
+    font-family: var(--font-title);
+    font-size: var(--font-size-body-medium);
+    font-weight: var(--font-weight-semibold);
+    color: var(--text-white);
+    cursor: pointer;
+    transition: color var(--transition-smooth);
+  }
+
+  .fanmode-seg button.is-selected {
+    color: var(--accent-pink);
+    font-weight: var(--font-weight-bold);
+  }
+
+  .fanmode-seg button[aria-disabled="true"] {
+    opacity: 0.4;
+  }
+
+  /* Top corners concentric with the selector: 16px inset + 21px pill radius */
+  #hr-card.fanmode {
+    border-radius: 37px 37px var(--radius-card) var(--radius-card);
+  }
+
+  #hr-card.fanmode .hr-bg {
+    border-radius: 37px 37px 0 0;
+  }
+
+  #fanmode-hint {
+    text-align: center;
+  }
+
+  #hr-card.fanmode .hr-header {
+    height: 150px;
+  }
+
+  #hr-card.fanmode .hr-value-wrapper {
+    top: 50px;
+  }
+
+  .hr-range-ftp {
+    display: none;
+  }
+
+  #hr-card.fanmode .hr-range {
+    min-width: 0;
+  }
+
+  #hr-card.fanmode .hr-range-ftp {
+    display: block;
+    flex: 0 0 0;
+    opacity: 0;
+    visibility: hidden;
+    padding-left: 0;
+    padding-right: 0;
+    margin-left: calc(-1 * var(--spc-md));
+    border-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    transition: flex var(--transition-smooth), opacity var(--transition-smooth),
+      margin var(--transition-smooth), padding var(--transition-smooth),
+      border-width var(--transition-smooth), visibility var(--transition-smooth);
+  }
+
+  #hr-card.fanmode.fanmode-hybrid .hr-range-ftp {
+    flex: 1;
+    opacity: 1;
+    visibility: visible;
+    padding-left: var(--spc-lg);
+    padding-right: var(--spc-lg);
+    margin-left: 0;
+    border-width: 1px;
+  }
+
+  /* Cool-down selector, Smart and Hybrid only */
+  .fanmode-cool {
+    display: none;
+  }
+
+  #hr-card.fanmode .fanmode-cool {
+    display: block;
+    max-height: 0;
+    opacity: 0;
+    visibility: hidden;
+    overflow: hidden;
+    margin: 0 var(--spc-xl);
+    transition: max-height var(--transition-smooth), opacity var(--transition-smooth),
+      margin var(--transition-smooth), visibility var(--transition-smooth);
+  }
+
+  #hr-card.fanmode.fanmode-shaped .fanmode-cool {
+    max-height: 72px;
+    opacity: 1;
+    visibility: visible;
+    margin-bottom: var(--spc-xl);
+  }
+
+  .fanmode-cool-label {
+    margin-bottom: 6px;
+    text-align: center;
+    font-size: var(--font-size-body-small);
+    font-weight: var(--font-weight-bold);
+    color: var(--text-label);
+  }
+
+  /* Light counterpart of .fanmode-seg; --sel (0..4) is set from FAN_CONTROL */
+  .fanmode-cool-seg {
+    position: relative;
+    display: flex;
+    gap: var(--spc-xs);
+    padding: 3px;
+    border: var(--button-outline);
+    border-radius: var(--radius-pill);
+    background: var(--background-app);
+  }
+
+  .fanmode-cool-seg::before {
+    content: "";
+    position: absolute;
+    top: 3px;
+    bottom: 3px;
+    left: 3px;
+    width: calc((100% - 6px - 4 * var(--spc-xs)) / 5);
+    border-radius: var(--radius-pill);
+    background: var(--bg-white);
+    box-shadow: 0 1px 3px rgba(19, 34, 55, 0.18);
+    transform: translateX(calc(var(--sel, 2) * (100% + var(--spc-xs))));
+    transition: transform var(--transition-smooth);
+  }
+
+  .fanmode-cool-seg button {
+    position: relative;
+    flex: 1;
+    min-width: 0;
+    height: 32px;
+    border: none;
+    border-radius: var(--radius-pill);
+    background: transparent;
+    font-family: var(--font-title);
+    font-size: var(--font-size-body-medium);
+    font-weight: var(--font-weight-semibold);
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: color var(--transition-smooth);
+  }
+
+  .fanmode-cool-seg button.is-selected {
+    color: var(--accent-pink);
+    font-weight: var(--font-weight-bold);
+  }
+
   .icon-edit {
     width: var(--spc-xl);
     height: var(--spc-xl);
@@ -351,6 +541,26 @@
     font-size: var(--font-size-title-small);
     color: var(--text-subline);
     margin-top: var(--spc-sm);
+  }
+
+  .system-status-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: var(--spc-md);
+  }
+
+  #ws-connection-indicator {
+    padding: 4px 8px;
+    font-size: 11px;
+    color: var(--text-white);
+    background: rgba(183, 183, 183, 0.8);
+    border-radius: 4px;
+    white-space: nowrap;
+  }
+
+  #ws-connection-indicator:empty {
+    display: none;
   }
 
   /* ================================================================

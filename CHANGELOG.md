@@ -5,6 +5,36 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.1] - 2026-11-13
+
+When the chest strap disconnects, Zwift (and other centrals) get **0 bpm** once instead of keeping the last heart rate. Fans and fail-safe unchanged.
+
+### Fixed
+
+- **HR relay to apps (BluetoothBikeSensorServer 3.2.2):** on HR sensor disconnect the local Heart Rate Measurement notifies 0 bpm once. Before, centrals such as Zwift kept showing the last value until their own timeout. Verified on hardware with Zwift (2026-11-13).
+
+- **Release note (≤ 160 B):** `Fan modes Pure, Smart and Hybrid (FTP, cool-down). On HR disconnect Zwift gets 0 bpm once.` (90 B)
+- **Version:** 1.8.1, **Build ID:** `20261113-210702`
+- **Dependency:** BluetoothBikeSensorServer >= 3.2.2; otherwise as 1.8.0
+
+## [1.8.0] - 2026-11-13
+
+Fan modes Pure, Smart and Hybrid. Pure keeps the 1.7.1 HR law; Smart adds output shaping (fast rise, slow fall, 25 % floor); Hybrid takes the higher of Smart and a power curve from FTP. WebUI mode selector, FTP and cool-down XS–XL; settings in NVS. Default mode remains Pure.
+
+### Added
+
+- **Fan modes** (`HW_ENABLE_FAN_POWER_MODE`, on by default): Pure / Smart / Hybrid in `FanBlend` + `FanHRAdapter`. Hybrid needs a configured power source and HR span ≥ 30 bpm; without connected power it runs as Smart. Cool-down XS–XL (−2…+2) scales the fall rate around 20 %/min. Hold-seed (§6.8): when a new effort starts while the fall limit still holds a high fan speed, the power filter is seeded so the next rise is not delayed. API `fanmode/set`, WebSocket `FAN_CONTROL` (0x0E) with cool-down byte, WebUI selector / FTP / cool-down. Concept and hardware results: `docs/FAN_POWER_HR_CONCEPT.md`.
+- **Host tests** `tests/fan_blend_test.cpp` and simulation `tools/fan_blend_sim.py` for Pure regression, Smart/Hybrid shaping, presence/fail-safe, Hold-seed, and the phase-5 disconnect/dismount cases.
+
+### Measured (Touch, fan-power test builds through `20261113-143847-fanpower`)
+
+- Idle and rides: free heap ~48–53 KB, largest free block 31.7 KB, no leak.
+- Hardware: Pure / Smart / Hybrid rides, 30/30 re-check with Hold-seed, NVS reboot (mode, FTP, cool-down). Residual open on hardware: mid-ride sensor disconnects (host-tested), sprints with the fan at ~50 %, cool-down other than M, Basic board flash smoke.
+
+- **Release note (≤ 160 B):** `Fan modes Pure, Smart and Hybrid: power-aware cooling, FTP and cool-down in the WebUI; Pure unchanged.` (99 B)
+- **Version:** 1.8.0, **Build ID:** `20261113-202258`
+- **Dependency:** as 1.7.1 (Touch: HomeWindWSAmoled ≥ 1.6.0)
+
 ## [1.7.1] - 2026-11-08
 
 Touch display: about 32 KB more free internal RAM, a faster settings/QR slide, a more responsive touch, and the main and standby screens no longer show stale sensor values. Basic: no functional change.

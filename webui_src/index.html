@@ -14,6 +14,15 @@
   <div id="hr-card" class="card">
     <div class="hr-bg">
 
+      <!-- Fan mode selector (shown once the firmware sends FAN_CONTROL) -->
+      <div class="fanmode-head" hidden>
+        <div class="fanmode-seg" role="group" aria-label="Fan mode">
+          <button type="button" data-mode="pure">Pure</button>
+          <button type="button" data-mode="smart">Smart</button>
+          <button type="button" data-mode="hybrid">Hybrid</button>
+        </div>
+      </div>
+
       <div class="hr-header"></div>
 
       <div class="waveAnimation">
@@ -61,7 +70,26 @@
           <div class="icon-edit"><div class="icon-edit-inner"></div></div>
         </div>
       </div>
+
+      <div class="hr-range hr-range-ftp" data-type="ftp" id="fanmode-ftp">
+        <div class="hr-range-label">FTP (W)</div>
+        <div class="hr-range-value-row">
+          <div class="hr-value-number" id="fanmode-ftp-value">200</div>
+          <div class="icon-edit"></div>
+        </div>
+      </div>
 </div>
+    <div class="fanmode-cool">
+      <div class="fanmode-cool-label" id="fanmode-cool-label">Cool-down</div>
+      <div class="fanmode-cool-seg" role="group" aria-labelledby="fanmode-cool-label">
+        <button type="button" data-cool="-2" aria-pressed="false" aria-label="Shortest cool-down">XS</button>
+        <button type="button" data-cool="-1" aria-pressed="false" aria-label="Short cool-down">S</button>
+        <button type="button" data-cool="0" aria-pressed="false" aria-label="Medium cool-down">M</button>
+        <button type="button" data-cool="1" aria-pressed="false" aria-label="Long cool-down">L</button>
+        <button type="button" data-cool="2" aria-pressed="false" aria-label="Longest cool-down">XL</button>
+      </div>
+    </div>
+    <div id="fanmode-hint" class="bike-hint" aria-live="polite" hidden></div>
 
   </div>
 
@@ -79,7 +107,6 @@
     </div>
     <div id="bike-cadence-hint" class="bike-hint" hidden>Cadence from power meter</div>
   </div>
-
   <!-- Fan Grid -->
   <div class="fan-grid">
 
@@ -91,7 +118,10 @@
   <!-- System Settings -->
   <div class="system-wrapper">
     <div class="system-title">System Settings</div>
-    <div id="firmware-version" class="system-subline">Firmware: --</div>
+    <div class="system-subline system-status-row">
+      <span id="firmware-version">Firmware: --</span>
+      <span id="ws-connection-indicator"></span>
+    </div>
 
     <div class="system-actions">
       <button id="btn-add-fan" class="btn btn-large btn-primary">Add Fan</button>

@@ -45,12 +45,14 @@ Options:
   --port PATH       serial port, e.g. /dev/cu.usbmodem1101
   --no-deploy       keep the local manifest; do not copy firmware into the website tree
   --clean           delete the object cache before compiling
+  --fan-power       test build with HW_ENABLE_FAN_POWER_MODE=1 (needs --no-deploy)
   -h, --help        show this help
 
 Examples:
   tools/build.sh
   tools/build.sh touch --flash
   tools/build.sh flash basic --port /dev/cu.usbmodem1101
+  tools/build.sh basic --no-deploy --fan-power --flash
 EOF
 }
 
@@ -124,12 +126,14 @@ write_build_stamp() {
   local opt_dir="$3"
   local include_dir="$opt_dir/include"
   mkdir -p "$include_dir"
-  python3 - "$include_dir/homewind_build_stamp.h" "$opt_dir/build_opt.h.new" "$display" "$VERSION" "$BUILD_ID" "$include_dir" <<'PY'
+  python3 - "$include_dir/homewind_build_stamp.h" "$opt_dir/build_opt.h.new" "$display" "$VERSION" "$BUILD_ID" "$include_dir" "$FAN_POWER" <<'PY'
 import sys
-header, opt, display, version, build_id, include_dir = sys.argv[1:]
+header, opt, display, version, build_id, include_dir, fan_power = sys.argv[1:]
 with open(header, "w", encoding="utf-8") as fh:
     fh.write("#pragma once\n")
     fh.write(f"#define HW_ENABLE_DISPLAY {display}\n")
+    if fan_power == "1":
+        fh.write("#define HW_ENABLE_FAN_POWER_MODE 1\n")
     fh.write(f'#define FW_VERSION "{version}"\n')
     fh.write(f'#define FW_BUILD_ID "{build_id}"\n')
 # Response-file quoting so the space in "ESP-Code 1_1" stays one argument.
@@ -247,7 +251,7 @@ build_variant() {
   write_build_stamp "$cache" "$DISPLAY" "$opt_dir"
 
   echo
-  echo "==> Build $variant  version $VERSION  build $BUILD_ID  display=$DISPLAY"
+  echo "==> Build $variant  version $VERSION  build $BUILD_ID  display=$DISPLAY  fan_power=$FAN_POWER"
   echo "    FQBN: $FQBN"
   echo "    log: $log"
   library_args
@@ -311,6 +315,7 @@ PORT=""
 DEPLOY=1
 CLEAN=0
 FLASH_AFTER=0
+FAN_POWER=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -323,6 +328,7 @@ while [[ $# -gt 0 ]]; do
     --port=*) PORT="${1#*=}"; shift ;;
     --no-deploy) DEPLOY=0; shift ;;
     --clean) CLEAN=1; shift ;;
+    --fan-power) FAN_POWER=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) die "unknown argument: $1 (try --help)" ;;
   esac
@@ -334,8 +340,17 @@ if [[ "$COMMAND" == "ports" ]]; then
 fi
 
 VARIANT="${VARIANT:-all}"
+if [[ "$FAN_POWER" -eq 1 && "$COMMAND" != "build" ]]; then
+  die "--fan-power only applies to build"
+fi
+if [[ "$FAN_POWER" -eq 1 && "$DEPLOY" -eq 1 ]]; then
+  die "--fan-power is a test build: add --no-deploy"
+fi
 require_tools
 read_version
+if [[ "$FAN_POWER" -eq 1 ]]; then
+  BUILD_ID="$BUILD_ID-fanpower"   # marks the binary; system/info shows only 8 chars
+fi
 
 if [[ "$COMMAND" == "flash" || "$FLASH_AFTER" -eq 1 ]]; then
   [[ "$VARIANT" != "all" ]] || die "flashing needs one variant: touch or basic"

@@ -61,6 +61,10 @@
 #include "../core/HeartRateSettings.h"
 #endif
 
+#if HW_ENABLE_FAN_POWER_MODE
+#include "../core/FanModeSettings.h"
+#endif
+
 #if HOMEWIND_ENABLE_API_ACTIONS
 #include "../web/ApiActions.h"
 #endif
@@ -119,6 +123,10 @@ static FirmwareUpdateManager s_firmwareUpdateManager;
 static HeartRateSettings s_heartRateSettings;
 #endif
 
+#if HW_ENABLE_FAN_POWER_MODE
+static FanModeSettings s_fanModeSettings;
+#endif
+
 #if HW_ENABLE_DISPLAY
 static DisplayManager s_displayManager;
 #endif
@@ -141,6 +149,10 @@ FirmwareUpdateManager* g_firmwareUpdateManager = nullptr;
 
 #if HW_ENABLE_NVS
 HeartRateSettings* g_heartRateSettings = nullptr;
+#endif
+
+#if HW_ENABLE_FAN_POWER_MODE
+FanModeSettings* g_fanModeSettings = nullptr;
 #endif
 
 #if HOMEWIND_ENABLE_WEBSOCKET
@@ -660,6 +672,11 @@ void App::initNVS() {
   
   // Initialize heart rate settings after NVS is ready
   initHeartRateSettings();
+#if HW_ENABLE_FAN_POWER_MODE
+  if (nvsReady && !g_fanModeSettings && s_fanModeSettings.begin()) {
+    g_fanModeSettings = &s_fanModeSettings;
+  }
+#endif
 #endif
 }
 
@@ -1098,6 +1115,16 @@ void App::loopSubsystems() {
 #if HW_ENABLE_NVS
   if (heartRateSettings && heartRateSettingsReady) {
     heartRateSettings->loop();
+  }
+#endif
+
+#if HW_ENABLE_FAN_POWER_MODE
+  if (g_fanModeSettings && g_fanModeSettings->loop()) {
+#if HOMEWIND_ENABLE_WEBSOCKET
+    if (g_webSocketTelemetry) {
+      g_webSocketTelemetry->markDirty(TelemetryFrameType::FAN_CONTROL);
+    }
+#endif
   }
 #endif
 

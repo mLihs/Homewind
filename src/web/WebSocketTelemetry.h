@@ -47,6 +47,7 @@
  * - FIRMWARE_PROGRESS (0x09): Firmware update progress
  * - FIRMWARE_SEARCH_RESULT (0x0A): Firmware search result
  * - BIKE_METRICS (0x0D): Power and cadence (also sent once per client on connect)
+ * - FAN_CONTROL (0x0E): Fan mode and acknowledged fan target (HW_ENABLE_FAN_POWER_MODE only)
  *
  * 0x0C is the WebUI control frame CLIENT_ID (not a telemetry frame).
  */
@@ -63,6 +64,7 @@ enum class TelemetryFrameType : uint8_t {
   FIRMWARE_SEARCH_RESULT = 0x0A,  // Delta: Firmware search result
   HEART_RATE_SETTINGS = 0x0B,     // Snapshot/Delta: Heart rate min/max settings
   BIKE_METRICS = 0x0D,            // Delta: Power and cadence (hw::BikeMetrics)
+  FAN_CONTROL = 0x0E,             // Delta: Fan mode and target (hw::FanControlStatus)
 };
 
 /**
@@ -255,6 +257,11 @@ private:
    * Build BIKE_METRICS frame (delta)
    */
   size_t buildBikeMetrics(uint8_t* buffer, size_t bufferSize);
+
+  /**
+   * Build FAN_CONTROL frame (delta)
+   */
+  size_t buildFanControl(uint8_t* buffer, size_t bufferSize);
   
   /**
    * Send full snapshot to newly connected client

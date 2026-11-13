@@ -55,6 +55,9 @@ private:
   // NOTE: handleHeartRateGet removed - settings now sent via WebSocket (HEART_RATE_SETTINGS frame)
   static void handleHeartRateSetMin(AsyncWebServerRequest* request);
   static void handleHeartRateSetMax(AsyncWebServerRequest* request);
+#if HW_ENABLE_FAN_POWER_MODE
+  static void handleFanModeSet(AsyncWebServerRequest* request);
+#endif
   static void handleTelemetryRefresh(AsyncWebServerRequest* request);
   static void sendResponse(AsyncWebServerRequest* request, int code, const char* message = nullptr);
   static void sendJSON(AsyncWebServerRequest* request, int code, const char* json);
