@@ -20,15 +20,17 @@ Rules
   and must not change the Basic build unless intended.
 - Measure heap (`t`/`h`, `HEAP_BENCHMARK.md`) before and after each feature.
 
-## Current state (verified 2026-11-08, Homewind 1.7.1, BikeSensor 3.2.1)
+## Current state (verified 2026-11-14, Homewind 1.8.1, BikeSensor 3.2.2)
 
 - BBS relays HR (0x180D), CSC (0x1816) and Cycling Power (0x1818) as
   **notify-only** characteristics. There is no FTMS service and no writable
   characteristic, so Zwift sees Homewind as a power source, never as a
-  controllable trainer.
+  controllable trainer. On HR disconnect the relay notifies centrals once
+  with 0 bpm (3.2.2).
 - Homewind has three sensor slots (HR, CSC, PWR); `tools/build.sh` sets
   `-DBBS_COMPILE_POWER=1`, `static_assert`s enforce it. Cadence: CSC while
-  connected, else the power meter. Fan control is still HR-only.
+  connected, else the power meter. Fan modes Pure / Smart / Hybrid shipped
+  in 1.8.0 (default Pure).
 - BLE links: sketch-folder `sdkconfig.h` raises
   `CONFIG_BT_NIMBLE_MAX_CONNECTIONS` from 3 to **4** = three sensors + one
   central (Zwift/Rouvy). All four are in use when HR + CSC + power are set up.
@@ -64,9 +66,9 @@ the concept §8 release readiness note.
 - **Why a proxy**: some trainers accept only one BLE central (Tacx NEO
   series, Van Rysel D100 — **verify** per model). Once Homewind holds that
   link, Zwift can only reach the trainer through Homewind, so Homewind must
-  forward everything, including control. Wahoo KICKR models since 2020
-  accept several BLE connections (**verify**); there Zwift can also connect
-  directly, and the proxy is a convenience, not a necessity.
+  forward everything, including control. Newer Wahoo KICKR models often
+  accept several BLE connections (**verify** per FW); there Zwift can also
+  connect directly, and the proxy is a convenience, not a necessity.
 - **Open architecture decision (before any design note):**
   - Where FTMS lives: BBS (needs a line-budget raise, see current state) or
     a separate library that Homewind wires next to BBS.
@@ -90,10 +92,21 @@ the concept §8 release readiness note.
   client role on top — no 5th BLE link. Trainer **and** separate power meter
   at the same time would need 5 links: out of scope (would mean HR + CSC +
   power meter + trainer + Zwift).
-- **Covers (FTMS 0x1826)**: Tacx NEO 2T, NEO 3M, Flux S, Flux 2; Wahoo
-  KICKR/Core/Snap; Elite (Suito, Direto, Zumo, Justo …); Saris H3/H4;
-  Kinetic R1; JetBlack Volt; Magene T300; Zwift Hub; Decathlon Van Rysel
-  D100/D500/D900 (D100: FTMS only, no ANT+, one connection — **verify**).
+- **Covers (FTMS 0x1826, indoor bike)**: in principle any trainer that
+  exposes Fitness Machine as an **indoor bike** with Indoor Bike Data +
+  Control Point (ERG and/or simulation). Examples: Tacx **Flux** S/2 (not
+  NEO — no FTMS); newer Wahoo KICKR/Core/Snap **with FTMS in FW** (KICKR
+  ’17 FW 3.4.68 dump: **no** `0x1826`, only CPS + Wahoo proprietary — see
+  `BluetoothBikeSensorServer/docs/trainers/Wahoo_KICKR_7D0B_2017.md`);
+  Elite (Suito, Direto, Zumo, Justo …); Saris H3/H4; Kinetic R1; JetBlack
+  Volt; Magene T300; Zwift Hub; Decathlon Van Rysel D100/D500/D900 (D100:
+  FTMS only, often one connection — **verify**). Feature bits and quirks
+  differ per model; the proxy mirrors what the trainer reports, it does not
+  invent capabilities.
+- **Cadence:** Wahoo KICKR does **not** provide cadence (maintainer). With
+  KICKR as the only bike source, pair a CSC sensor (or a power meter that
+  reports cadence). Indoor Bike Data from an FTMS KICKR may still omit
+  instantaneous cadence — treat cadence as optional from the trainer.
 - **Server side (Homewind → Zwift)**: Fitness Machine Feature 0x2ACC,
   Indoor Bike Data 0x2AD2 (notify), Training Status 0x2AD3, Supported
   Resistance Level Range 0x2AD6, Supported Power Range 0x2AD8, Control Point
@@ -114,25 +127,40 @@ the concept §8 release readiness note.
   leave as is?), reconnect of either side.
 - **Known issues (verify)**: Tacx NEO 2T firmware 2.6.0 has user reports of
   BLE problems; record the trainer firmware in every test report.
-- **First step, no code**: nRF Connect dump of the NEO 2T (services,
-  characteristics, Feature bits) stored in BBS docs.
+- **First step, no code**: nRF Connect dump of the NEO 2T — done 2026-11-14
+  (`BluetoothBikeSensorServer/docs/trainers/Tacx_Neo_2T_14189.md`). Discovery
+  only (no Feature/FW value reads yet). Exposes CSC, Cycling Power and Tacx
+  FE-C over BLE (`6E40FEC1-…`), **not** FTMS `0x1826`.
+- **NEO vs FTMS (confirmed 2026-11-14):** the Tacx **NEO series has no native
+  Bluetooth FTMS**; Garmin/Tacx use proprietary BLE and ANT+/FE-C. Reason
+  given by Garmin/Tacx: FTMS does not carry the virtual-flywheel mass /
+  algorithms the NEO needs. **Flux** (and similar) Tacx lines do support
+  FTMS. So §2 (FTMS proxy) covers Flux / FTMS-capable Wahoo / Elite / …;
+  controllable NEO support is §3 (FE-C), not a firmware toggle on the NEO.
+- **KICKR ’17 dump (2026-11-14):** `Wahoo_KICKR_7D0B_2017.md` — CPS + Wahoo
+  proprietary services, **no FTMS**, **no CSC**. Control on this FW is not
+  §2 until a FTMS-capable Wahoo dump exists.
 - **Tests**: ERG step 150 → 300 → 150 W (trainer follows within the time it
   takes without Homewind); simulation grade 0 → 8 → −3 %; Zwift reconnect
   5×; trainer power cycle mid-ride; 1 h ride with HR + trainer; fan control
-  from trainer power; heap delta against the RAM gate.
+  from trainer power; heap delta against the RAM gate. Prefer an FTMS
+  trainer (e.g. Flux) for §2 hardware tests; NEO for §3.
 - **Priority**: High (after the architecture decision)
 
-## 3. Smart-trainer support — Tacx "FE-C over BLE" (older Tacx)
+## 3. Smart-trainer support — Tacx "FE-C over BLE" (NEO and older Tacx)
 
-- **Goal**: same proxy as 2 for Tacx trainers without FTMS.
-- **Covers**: Tacx NEO (Gen 1), NEO 2, Flow Smart, Vortex Smart, Bushido
-  Smart, Genius Smart (Garmin groups these as one protocol class on
-  developer.garmin.com/tacx-trainer).
-- **Protocol (verify)**: proprietary Tacx service carrying ANT+ FE-C pages
-  over BLE (service `6E40FEC1-…`, separate RX/TX characteristics). Full
-  specification only via Garmin's "Request Access". Data pages e.g. 0x10
-  general, 0x19 trainer data; control pages e.g. 0x30 resistance, 0x31
-  target power, 0x33 track resistance.
+- **Goal**: same Zwift-facing proxy as 2 for Tacx trainers **without** FTMS
+  (entire NEO series, plus older FE-C-over-BLE models).
+- **Covers**: Tacx NEO (Gen 1), NEO 2, NEO 2T, NEO 3M (**no FTMS by design**);
+  Flow Smart, Vortex Smart, Bushido Smart, Genius Smart (Garmin groups these
+  as one protocol class on developer.garmin.com/tacx-trainer). Flux and
+  other FTMS Tacx stay under §2.
+- **Protocol**: proprietary Tacx service carrying ANT+ FE-C pages over BLE
+  (service `6E40FEC1-…`, RX/TX characteristics — seen on the NEO 2T dump).
+  Full specification only via Garmin's "Request Access". Data pages e.g.
+  0x10 general, 0x19 trainer data; control pages e.g. 0x30 resistance, 0x31
+  target power, 0x33 track resistance (**page map still verify** against the
+  Garmin docs once access is granted).
 - **Design**: translate FTMS Control Point requests from Zwift into FE-C
   control pages, and FE-C data pages into Indoor Bike Data. Reuses the server
   side of feature 2.

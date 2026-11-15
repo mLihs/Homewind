@@ -668,11 +668,11 @@ false fails — verdict from the sensor and `FAN_CONTROL` log.
   was already off.
 - Heap during the session 47.4–53.9 KB free, largest block 31.7 KB.
 
-Release readiness (2026-11-13): ship as **Homewind 1.8.0** with
-`HW_ENABLE_FAN_POWER_MODE` on by default. Default mode stays Pure (= 1.7.1).
-Accepted residual risk: power disconnect while the fan is held high not
-fully ridden; ~50 % sprint re-check and cool-down ≠ 0 not re-ridden; Basic
-board not smoke-flashed with this feature (same gate as Touch).
+Release readiness (2026-11-13): shipped as **Homewind 1.8.0** / **1.8.1**
+with `HW_ENABLE_FAN_POWER_MODE` on by default. Default mode stays Pure
+(= 1.7.1). Accepted residual risk: power disconnect while the fan is held
+high not fully ridden; ~50 % sprint re-check and cool-down ≠ 0 not
+re-ridden. Basic: 1.8.1 flashed over OTA and NVS checked (2026-11-14).
 
 ## 9. Sources (review 2026-11-08)
 
