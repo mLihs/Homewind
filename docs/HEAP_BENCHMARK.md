@@ -25,6 +25,7 @@ Values are ESP internal heap (`ESP.getFreeHeap` / largest free block), not PSRAM
 
 | date | version | build | board | phase | freeHeap | largestFreeBlock | frag% | notes |
 |------|---------|-------|-------|-------|----------|------------------|-------|-------|
+| 2026-11-18 | 1.8.2 | diagnostic 20261117-221836 | touch | ride~28min | 50528 | 31732 | 37 | G1 baseline (trainer mirror): HR, Zwift Apple TV, WebUI; range 50.1–50.5 KB; min since boot 44464 (from 6 min); DMA min 36704; serial `t` hung the loop at 28 min (diagnostic only) |
 | 2026-11-08 | 1.7.0 + HomeWindWSAmoled 1.6.1 | diagnostic | touch | steady~88min | 47804 | 31732 | 34 | HR+CSC+PWR, Zwift, WebUI on 2 clients; range 47.8–52.8 KB; min since boot 38944; DMA min 31184 |
 | 2026-11-08 | 1.7.0 + HomeWindWSAmoled 1.6.1 | diagnostic | touch | boot~2min | 52812 | 31732 | 40 | same run |
 | 2026-11-07 | 1.7.0 | 20261107-201127 | basic | steady~29min | 86056 | 40948 | 52 | all sensors; range 82.8–86.1 KB |

@@ -1,0 +1,4 @@
+trainer_mirror_relay v0.2 scan, 2026-11-14 16:04 (ESP32-S3, active scan)
+d4:89:88:6d:15:38  rssi -77  Tacx Neo 2T 14189  [0x1818 0xfc82 0x180a 6e40fec1-b5a3-f393-e0a9-e50e24dcca9e]
+raw (adv + scan response): 02 01 06 04 16 82 FC 01 12 09 54 61 63 78 20 4E 65 6F 20 32 54 20 31 34 31 38 39 03 19 80 04 07 03 18 18 82 FC 0A 18 11 07 9E CA DC 24 0E E5 A9 E0 93 F3 A3 B5 C1 FE 40 6E
+decoded: flags 0x06 | service data FC82 = 01 | name "Tacx Neo 2T 14189" | appearance 0x0480 (cycling) | 16-bit services 1818, FC82, 180A | 128-bit 6e40fec1-b5a3-f393-e0a9-e50e24dcca9e (FE-C over BLE)

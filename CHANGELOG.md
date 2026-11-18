@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.2] - 2026-11-15
+
+Two more Xiaomi fans: Smart Standing Fan Pro Slim and Smart Desktop Air Circulation Fan (SmartMiFanAsync 2.0.1).
+
+### Added
+
+- **Fans:** Xiaomi Smart Standing Fan Pro Slim (`xiaomi.fan.p85`) and Xiaomi Smart Desktop Air Circulation Fan (`xiaomi.fan.p70`).
+
+- **Release note (≤ 160 B):** `New fans: Smart Standing Fan Pro Slim and Desktop Air Circulation Fan.` (70 B)
+- **Version:** 1.8.2, **Build ID:** `20261115-092411`
+- **Dependency:** SmartMiFanAsync >= 2.0.1; otherwise as 1.8.1
+
 ## [1.8.1] - 2026-11-13
 
 When the chest strap disconnects, Zwift (and other centrals) get **0 bpm** once instead of keeping the last heart rate. Fans and fail-safe unchanged.

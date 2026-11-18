@@ -1,0 +1,50 @@
+[09:24:11.792] Normal: Scanner On.
+[09:26:10.305] Normal: Device Scanned.
+[09:26:10.828] Normal: Appearance changed from Generic to Fitness.
+[09:26:11.795] Normal: Scanner Off.
+[09:26:37.047] Normal: Connected.
+[09:26:37.672] Normal: Discovered Cycling Speed and Cadence, Cycling Power, 6E40FEC1-B5A3-F393-E0A9-E50E24DCCA9E, Secure DFU Service, Device Information, CF285001-00DB-15A1-0E3F-FFA5794C3719, FE03A000-17D0-470A-8798-4AD3E1C1F35B, FC82, and FA1C030E-52D1-2062-0777-BC61F0B8E27B Services.
+[09:26:37.729] Normal: Service Discovery returned nil Services.
+[09:26:37.792] Normal: Discovered CSC Measurement, CSC Feature, Sensor Location, and SC Control Point Characteristics for Service Cycling Speed and Cadence.
+[09:26:37.849] Normal: Service Discovery returned nil Services.
+[09:26:37.912] Normal: Discovered Cycling Power Measurement, Cycling Power Feature, Sensor Location, Cycling Power Vector, and Cycling Power Control Point Characteristics for Service Cycling Power.
+[09:26:37.970] Normal: Service Discovery returned nil Services.
+[09:26:38.062] Normal: Discovered 6E40FEC2-B5A3-F393-E0A9-E50E24DCCA9E and 6E40FEC3-B5A3-F393-E0A9-E50E24DCCA9E Characteristics for Service 6E40FEC1-B5A3-F393-E0A9-E50E24DCCA9E.
+[09:26:38.119] Normal: Service Discovery returned nil Services.
+[09:26:38.181] Normal: Discovered Buttonless DFU Without Bonds Characteristics for Service Secure DFU Service.
+[09:26:38.239] Normal: Service Discovery returned nil Services.
+[09:26:38.302] Normal: Discovered Manufacturer Name String, Model Number String, Serial Number String, Hardware Revision String, and Firmware Revision String Characteristics for Service Device Information.
+[09:26:38.389] Normal: Service Discovery returned nil Services.
+[09:26:38.451] Normal: Discovered CF285002-00DB-15A1-0E3F-FFA5794C3719 and CF285003-00DB-15A1-0E3F-FFA5794C3719 Characteristics for Service CF285001-00DB-15A1-0E3F-FFA5794C3719.
+[09:26:38.509] Normal: Service Discovery returned nil Services.
+[09:26:38.602] Normal: Discovered FE03A001-17D0-470A-8798-4AD3E1C1F35B and FE03A00F-17D0-470A-8798-4AD3E1C1F35B Characteristics for Service FE03A000-17D0-470A-8798-4AD3E1C1F35B.
+[09:26:38.659] Normal: Service Discovery returned nil Services.
+[09:26:38.724] Normal: Discovered 00000002-19CA-4651-86E5-FA29DCDD09D1, 00000003-19CA-4651-86E5-FA29DCDD09D1, and 00000004-19CA-4651-86E5-FA29DCDD09D1 Characteristics for Service FC82.
+[09:26:38.809] Normal: Service Discovery returned nil Services.
+[09:26:38.933] Normal: Discovered FA1C0302-52D1-2062-0777-BC61F0B8E27B and FA1C0301-52D1-2062-0777-BC61F0B8E27B Characteristics for Service FA1C030E-52D1-2062-0777-BC61F0B8E27B.
+[09:26:38.990] Normal: Discovered Client Characteristic Configuration Descriptors for Characteristic CSC Measurement
+[09:26:38.991] Normal: CSC Feature has no Descriptors.
+[09:26:38.991] Normal: Sensor Location has no Descriptors.
+[09:26:39.080] Normal: Discovered Client Characteristic Configuration Descriptors for Characteristic SC Control Point
+[09:26:39.140] Normal: Discovered Client Characteristic Configuration Descriptors for Characteristic Cycling Power Measurement
+[09:26:39.140] Normal: Cycling Power Feature has no Descriptors.
+[09:26:39.140] Normal: Sensor Location has no Descriptors.
+[09:26:39.200] Normal: Discovered Client Characteristic Configuration Descriptors for Characteristic Cycling Power Vector
+[09:26:39.260] Normal: Discovered Client Characteristic Configuration Descriptors for Characteristic Cycling Power Control Point
+[09:26:39.320] Normal: Discovered Client Characteristic Configuration Descriptors for Characteristic 6E40FEC2-B5A3-F393-E0A9-E50E24DCCA9E
+[09:26:39.321] Normal: 6E40FEC3-B5A3-F393-E0A9-E50E24DCCA9E has no Descriptors.
+[09:26:39.380] Normal: Discovered Client Characteristic Configuration Descriptors for Characteristic Buttonless DFU Without Bonds
+[09:26:39.380] Normal: Manufacturer Name String has no Descriptors.
+[09:26:39.381] Normal: Model Number String has no Descriptors.
+[09:26:39.381] Normal: Serial Number String has no Descriptors.
+[09:26:39.381] Normal: Hardware Revision String has no Descriptors.
+[09:26:39.381] Normal: Firmware Revision String has no Descriptors.
+[09:26:39.381] Normal: CF285002-00DB-15A1-0E3F-FFA5794C3719 has no Descriptors.
+[09:26:39.440] Normal: Discovered Client Characteristic Configuration Descriptors for Characteristic CF285003-00DB-15A1-0E3F-FFA5794C3719
+[09:26:39.440] Normal: FE03A001-17D0-470A-8798-4AD3E1C1F35B has no Descriptors.
+[09:26:39.530] Normal: Discovered Client Characteristic Configuration Descriptors for Characteristic FE03A00F-17D0-470A-8798-4AD3E1C1F35B
+[09:26:39.620] Normal: Discovered Client Characteristic Configuration Descriptors for Characteristic 00000002-19CA-4651-86E5-FA29DCDD09D1
+[09:26:39.620] Normal: 00000003-19CA-4651-86E5-FA29DCDD09D1 has no Descriptors.
+[09:26:39.680] Normal: Discovered Client Characteristic Configuration Descriptors for Characteristic 00000004-19CA-4651-86E5-FA29DCDD09D1
+[09:26:39.680] Normal: FA1C0302-52D1-2062-0777-BC61F0B8E27B has no Descriptors.
+[09:26:39.800] Normal: Discovered Client Characteristic Configuration Descriptors for Characteristic FA1C0301-52D1-2062-0777-BC61F0B8E27B

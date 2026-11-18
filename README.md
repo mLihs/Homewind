@@ -48,8 +48,10 @@ Housing and stand: free 3D-print files on [MakerWorld](https://makerworld.com/en
 
 - Xiaomi Smart Standing Fan 2 Pro
 - Xiaomi Smart Standing Fan 2
+- Xiaomi Smart Standing Fan Pro Slim
 - Smartmi Standing Fan 3
 - Xiaomi Smart Standing Air Circulation Fan
+- Xiaomi Smart Desktop Air Circulation Fan
 
 Several fans can be controlled at once. Your fan is missing? [Open an issue](../../issues) with the model name.
 
@@ -137,7 +139,7 @@ Homewind libraries (by the author):
 | Library | Version | Purpose |
 | --- | --- | --- |
 | [BluetoothBikeSensorServer](https://github.com/mLihs/BluetoothBikeSensorServer) | 3.2.1 (required: ≥ 3.2.1, API `BikeSensor.h`) | Relays heart rate, speed/cadence and power from BLE sensors to a local GATT server |
-| [SmartMiFanAsync](https://github.com/mLihs/SmartMiFanAsync) | 2.0.0 (required: ≥ 2.0.0) | Non-blocking Xiaomi / Smartmi fan control over miIO |
+| [SmartMiFanAsync](https://github.com/mLihs/SmartMiFanAsync) | 2.0.1 (required: ≥ 2.0.1) | Non-blocking Xiaomi / Smartmi fan control over miIO |
 | [GitFirmwareUpdate](https://github.com/mLihs/GitFirmwareUpdate) | 1.0.4 | OTA firmware updates |
 | [wifiMangerLite](https://github.com/mLihs/wifiMangerLite) | 3.1.0 (required: ≥ 3.1.0) | Wi-Fi setup via captive portal, NVS storage |
 | [NVSUtilityLibrary](https://github.com/mLihs/NVSUtilityLibrary) | 1.0.1 | NVS settings storage (JSON) |

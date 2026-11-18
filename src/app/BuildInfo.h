@@ -22,7 +22,7 @@
 #endif
 
 #ifndef FW_VERSION
-#define FW_VERSION "1.8.1"
+#define FW_VERSION "1.8.2"
 #endif
 
 // Build ID (set by CI/CD or build script, e.g. git short hash)
