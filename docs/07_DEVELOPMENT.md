@@ -160,10 +160,10 @@ The build system automatically generates headers from `webui_src/`:
 - `generated/webui_*.h` - Auto-generated headers
 
 **Build Process**:
-1. Processes `webui_src/index.html`, `app.css`, `app.js`
-2. Calculates content hash for cache-busting
-3. Generates PROGMEM headers with ETags
-4. Embeds assets in flash (no RAM usage)
+1. Minifies `app.js` (Terser) and `app.css` (Lightning CSS), inlines both into `webui_src/index.html` (`__WEBUI_CSS__`, `__WEBUI_JS__`)
+2. Calculates the content hash (`data-webui-build`)
+3. Generates one GZIP PROGMEM header with ETag (`webui_index_html.h`; compressed with Zopfli, `brew install zopfli`)
+4. Embeds it in flash (no RAM usage)
 
 ### Manual Build
 

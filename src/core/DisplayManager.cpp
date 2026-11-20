@@ -186,12 +186,27 @@ void DisplayManager::updateCSCState() {
       if (!csc && strcmp(sensors[i].type, "CSC") == 0) csc = &sensors[i];
       if (!pwr && strcmp(sensors[i].type, "PWR") == 0) pwr = &sensors[i];
     }
+#if HW_ENABLE_TRAINER_MIRROR
+    BLERelayManager::TrainerStatus trainer;
+    g_bleRelayManager->trainerStatus(trainer);
+    const hw::BikeCard card = hw::selectBikeCard(
+        csc != nullptr, csc && csc->connected, pwr != nullptr, pwr && pwr->connected, trainer.mirror,
+        trainer.state == static_cast<uint8_t>(BikeSensor::TrainerState::READY));
+#else
     const hw::BikeCard card = hw::selectBikeCard(csc != nullptr, csc && csc->connected,
                                                  pwr != nullptr, pwr && pwr->connected);
+#endif
     _cscStateConfigured = card.state != hw::BikeCardState::NotConfigured;
     _cachedCSCState = card.state == hw::BikeCardState::Active ? CSC_STATE_ACTIVE : CSC_STATE_INACTIVE;
     _cachedShowPower = card.showPower;
     const HwSensorInfo* named = card.nameFromPower ? pwr : csc;
+#if HW_ENABLE_TRAINER_MIRROR
+    if (card.nameFromTrainer) {
+      strncpy(_cachedCSCName, trainer.name[0] ? trainer.name : "Trainer", sizeof(_cachedCSCName) - 1);
+      _cachedCSCName[sizeof(_cachedCSCName) - 1] = '\0';
+      named = nullptr;
+    }
+#endif
     if (named) {
       strncpy(_cachedCSCName, named->name, sizeof(_cachedCSCName) - 1);
       _cachedCSCName[sizeof(_cachedCSCName) - 1] = '\0';

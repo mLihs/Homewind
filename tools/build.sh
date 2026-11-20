@@ -45,7 +45,8 @@ Options:
   --port PATH       serial port, e.g. /dev/cu.usbmodem1101
   --no-deploy       keep the local manifest; do not copy firmware into the website tree
   --clean           delete the object cache before compiling
-  --fan-power       test build with HW_ENABLE_FAN_POWER_MODE=1 (needs --no-deploy)
+  --fan-power       test stamp: force HW_ENABLE_FAN_POWER_MODE=1 (needs --no-deploy)
+  --trainer         test stamp only (trainer mirror is on in every release build from 2.0; needs --no-deploy)
   -h, --help        show this help
 
 Examples:
@@ -126,9 +127,9 @@ write_build_stamp() {
   local opt_dir="$3"
   local include_dir="$opt_dir/include"
   mkdir -p "$include_dir"
-  python3 - "$include_dir/homewind_build_stamp.h" "$opt_dir/build_opt.h.new" "$display" "$VERSION" "$BUILD_ID" "$include_dir" "$FAN_POWER" <<'PY'
+  python3 - "$include_dir/homewind_build_stamp.h" "$opt_dir/build_opt.h.new" "$display" "$VERSION" "$BUILD_ID" "$include_dir" "$FAN_POWER" "$TRAINER" <<'PY'
 import sys
-header, opt, display, version, build_id, include_dir, fan_power = sys.argv[1:]
+header, opt, display, version, build_id, include_dir, fan_power, trainer = sys.argv[1:]
 with open(header, "w", encoding="utf-8") as fh:
     fh.write("#pragma once\n")
     fh.write(f"#define HW_ENABLE_DISPLAY {display}\n")
@@ -144,6 +145,11 @@ with open(opt, "w", encoding="utf-8") as fh:
     fh.write("-DBBS_MAX_DISCOVERED=15\n")
     # Power sensor type (static_assert in BLERelayManager.h).
     fh.write("-DBBS_COMPILE_POWER=1\n")
+    # Trainer mirror GA from 2.0 (static_assert matches BBS_COMPILE_TRAINER).
+    fh.write("-DHW_ENABLE_TRAINER_MIRROR=1\n-DBBS_COMPILE_TRAINER=1\n")
+    # PSRAM only on Touch (static_assert in BLERelayManager.h).
+    if display == "1":
+        fh.write("-DBBS_TRAINER_PSRAM=1\n")
 PY
   # The sketch-folder sdkconfig.h shadow reaches library sources too; "none"
   # when it is missing, so adding or removing it also counts as a change.
@@ -251,7 +257,7 @@ build_variant() {
   write_build_stamp "$cache" "$DISPLAY" "$opt_dir"
 
   echo
-  echo "==> Build $variant  version $VERSION  build $BUILD_ID  display=$DISPLAY  fan_power=$FAN_POWER"
+  echo "==> Build $variant  version $VERSION  build $BUILD_ID  display=$DISPLAY  fan_power=$FAN_POWER  trainer=$TRAINER"
   echo "    FQBN: $FQBN"
   echo "    log: $log"
   library_args
@@ -316,6 +322,7 @@ DEPLOY=1
 CLEAN=0
 FLASH_AFTER=0
 FAN_POWER=0
+TRAINER=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -329,6 +336,7 @@ while [[ $# -gt 0 ]]; do
     --no-deploy) DEPLOY=0; shift ;;
     --clean) CLEAN=1; shift ;;
     --fan-power) FAN_POWER=1; shift ;;
+    --trainer) TRAINER=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) die "unknown argument: $1 (try --help)" ;;
   esac
@@ -346,10 +354,19 @@ fi
 if [[ "$FAN_POWER" -eq 1 && "$DEPLOY" -eq 1 ]]; then
   die "--fan-power is a test build: add --no-deploy"
 fi
+if [[ "$TRAINER" -eq 1 && "$COMMAND" != "build" ]]; then
+  die "--trainer only applies to build"
+fi
+if [[ "$TRAINER" -eq 1 && "$DEPLOY" -eq 1 ]]; then
+  die "--trainer is only a build-id stamp: add --no-deploy (release builds already include the mirror)"
+fi
 require_tools
 read_version
 if [[ "$FAN_POWER" -eq 1 ]]; then
   BUILD_ID="$BUILD_ID-fanpower"   # marks the binary; system/info shows only 8 chars
+fi
+if [[ "$TRAINER" -eq 1 ]]; then
+  BUILD_ID="$BUILD_ID-trainer"
 fi
 
 if [[ "$COMMAND" == "flash" || "$FLASH_AFTER" -eq 1 ]]; then

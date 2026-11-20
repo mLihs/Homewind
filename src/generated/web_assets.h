@@ -8,7 +8,5 @@
 #define HOMEWIND_WEB_ASSETS_H
 
 #include "webui_index_html.h"
-#include "webui_app_css.h"
-#include "webui_app_js.h"
 
 #endif // HOMEWIND_WEB_ASSETS_H

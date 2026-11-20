@@ -53,6 +53,32 @@ static void testCscAndPower() {
   CHECK(c.state == BikeCardState::Inactive && !c.nameFromPower && !c.showPower);
 }
 
+// Further arguments: trainerConfigured, trainerReady
+static void testTrainer() {
+  // Without a trainer: unchanged
+  CHECK(!selectBikeCard(true, true, true, true).nameFromTrainer);
+  // Trainer only
+  BikeCard c = selectBikeCard(false, false, false, false, true, true);
+  CHECK(c.state == BikeCardState::Active && c.nameFromTrainer && c.showPower);
+  c = selectBikeCard(false, false, false, false, true, false);
+  CHECK(c.state == BikeCardState::Inactive && c.nameFromTrainer && !c.showPower);
+  // D2: a connected power meter wins
+  c = selectBikeCard(false, false, true, true, true, true);
+  CHECK(c.state == BikeCardState::Active && !c.nameFromTrainer && c.nameFromPower && c.showPower);
+  // Power meter configured but not connected: trainer power and name
+  c = selectBikeCard(false, false, true, false, true, true);
+  CHECK(c.state == BikeCardState::Active && c.nameFromTrainer && c.showPower);
+  c = selectBikeCard(false, false, true, false, true, false);
+  CHECK(c.state == BikeCardState::Inactive && !c.nameFromTrainer && c.nameFromPower && !c.showPower);
+  // CSC connected: CSC name, trainer power
+  c = selectBikeCard(true, true, false, false, true, true);
+  CHECK(c.state == BikeCardState::Active && !c.nameFromTrainer && !c.nameFromPower && c.showPower);
+  c = selectBikeCard(true, false, false, false, true, true);
+  CHECK(c.nameFromTrainer && c.showPower);
+  c = selectBikeCard(true, false, false, false, true, false);
+  CHECK(c.state == BikeCardState::Inactive && !c.nameFromTrainer && !c.nameFromPower);
+}
+
 // Arguments: showPower, powerValid, powerW
 static void testWatts() {
   CHECK(bikeCardWatts(false, true, 210) == -1);
@@ -70,6 +96,7 @@ int main() {
   testCscOnly();
   testPowerOnly();
   testCscAndPower();
+  testTrainer();
   testWatts();
   if (g_failures) {
     std::printf("bike_card_test: %d failure(s)\n", g_failures);

@@ -45,6 +45,9 @@ static const uint8_t BLE_SENSOR_NAME_MAX = 64;
 static const uint8_t BLE_DISCOVERY_MAX = 15;
 static_assert(BBS_MAX_DISCOVERED == BLE_DISCOVERY_MAX, "tools/build.sh must set -DBBS_MAX_DISCOVERED=15");
 static_assert(BBS_COMPILE_POWER == 1, "tools/build.sh must set -DBBS_COMPILE_POWER=1");
+static_assert(HW_ENABLE_TRAINER_MIRROR == BBS_COMPILE_TRAINER,
+              "tools/build.sh --trainer sets HW_ENABLE_TRAINER_MIRROR and BBS_COMPILE_TRAINER together");
+static_assert(!BBS_TRAINER_PSRAM || HW_ENABLE_DISPLAY, "the Trainer in PSRAM only on Touch");
 
 /**
  * @struct HwSensorInfo
@@ -85,6 +88,12 @@ enum class BleEnqueueResult : uint8_t {
   NOT_FOUND,   // 404 (unknown sensor name)
   STALE,       // 409 (discovery generation/index no longer valid)
   CLOSED,      // 409 (maintenance admission closed)
+#if HW_ENABLE_TRAINER_MIRROR
+  TOO_MANY,    // 409 (device rule: at most two devices besides HR)
+  TRAINER_MAC, // 409 (device rule: the trainer is not a sensor)
+  BUSY,        // 409 (trainer setup while a discovery is open)
+  NO_TRAINER,  // 409 (no trainer set up)
+#endif
 };
 
 /**
@@ -136,6 +145,29 @@ public:
   BleEnqueueResult requestDiscoveryStop();
   BleEnqueueResult requestServerPaused(bool paused);
 
+#if HW_ENABLE_TRAINER_MIRROR
+  // Trainer mirror (AGENT_TRAINER_MIRROR.md Task 4). setup/enable take effect
+  // after a restart. setup: TrainerCheck (BikeSensor) or one of kTrainerSetup*.
+  static constexpr uint8_t kTrainerSetupIdle = 0xFF;
+  static constexpr uint8_t kTrainerSetupRunning = 0xFE;
+  static constexpr uint8_t kTrainerSetupBusy = 0xFD;
+  static constexpr uint8_t kTrainerSetupRule = 0xFC;
+  struct TrainerStatus {
+    bool enabled;                    // NVS trn_on
+    bool mirror;                     // this boot mirrors the trainer
+    bool appConnected;
+    uint8_t state;                   // BikeSensor::TrainerState
+    uint8_t setup;
+    char mac[18];                    // NVS trn_dev; "" = none
+    char name[32];
+  };
+  BleEnqueueResult enqueueTrainerSetup(const char* mac, const char* name);
+  BleEnqueueResult enqueueTrainerSetupFromDiscovery(uint32_t generation, uint8_t index);
+  BleEnqueueResult enqueueTrainerEnable(bool on);
+  BleEnqueueResult enqueueTrainerForget();
+  void trainerStatus(TrainerStatus& out);
+#endif
+
   // ---- Loop task ----------------------------------------------------------
   bool isServerPaused() const { return _serverPaused; }
   uint8_t getConfiguredSensorCount() const { return _sensorCount; }
@@ -161,6 +193,7 @@ private:
   bool initialized;
   bool _maintenanceStopped;
   bool _serverPaused;
+  unsigned long _pauseStartMs;  // last pause request; the pause ends on its own after kServerPauseMaxMs
   uint8_t _connectedCount;      // Number of currently connected sensors
   uint8_t _lastDiscoveryCount;  // Results from last discovery
   
@@ -201,6 +234,9 @@ private:
   HwDiscoveredSensor _discovered[BLE_DISCOVERY_MAX];
   uint8_t _discoveredCount;
   uint32_t _discoveredGeneration;
+#if HW_ENABLE_TRAINER_MIRROR
+  TrainerStatus _trainer;            // the stored fields are written by the loop task only
+#endif
 
   // Reconcile (loop task only)
   hw::BleReconciler _reconciler;
@@ -245,10 +281,32 @@ private:
   void adoptSensorAddress(uint8_t typeBit);
   void runReconcile(bool throttled, bool advertise = true);
   void updateAdvertisedTypes();
-  void refreshSnapshot();
+  bool refreshSnapshot();   // true: the sensor part changed (trainer part marks its own frame)
   void markSensorsDirty();
   void notifyDisplay(uint8_t typeBit);
   void updateBikeMetrics();
+  void deleteConfig(int i);
+
+#if HW_ENABLE_TRAINER_MIRROR
+  static constexpr const char* NVS_KEY_TRAINER_ON = "trn_on";    // u8
+  static constexpr const char* NVS_KEY_TRAINER_DEV = "trn_dev";  // TrainerDev
+  struct TrainerDev { char mac[18]; char name[32]; };
+  TrainerDev _trainerPending;        // the running setup
+  bool _trainerSetupScan;            // the next DISCOVERY_DONE is the setup's
+  bool _trainerPowerNew;
+  void markTrainerDirty();
+  static void staticOnTrainerPower(const BikeSensor::PowerSample& sample);
+  void slotMacsLocked(const char* out[hw::kBleSlots]) const;
+  hw::BleDeviceRule sensorRule(const HwDiscoveredSensor& rec, uint8_t requestedMask);
+  BleEnqueueResult trainerSetupCheck(const char* mac, uint8_t& removeMask);
+  bool trainerHolds(const char* mac) const;
+  void loadTrainerFromNVS();
+  bool saveTrainerToNVS(bool on, const TrainerDev* dev);
+  void removeSlots(uint8_t typeMask);
+  void applyTrainerSetup(const char* mac, const char* name);
+  void onTrainerSetupDone(uint8_t check);
+  void setTrainerSetupResult(uint8_t result);
+#endif
 
   static uint8_t stringToTypeBit(const char* type);
   static const char* typeBitToString(uint8_t typeBit);

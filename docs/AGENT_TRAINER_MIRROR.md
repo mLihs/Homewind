@@ -1,6 +1,7 @@
 # Agent task: trainer mirror — finish gate G5, then build
 
 Read first: `docs/TRAINER_PROXY_DESIGN.md` (rev 8) and `docs/AGENT_FEATURES.md` § 2.
+Website / support copy (EN+DE, publish at Trainer GA): `Website/docs/WEBSITE_TRAINER_MIRROR.md`.
 Hardware: Tacx NEO 2T (local), spare ESP32-S3 (XIAO) with `tools/trainer_mirror_relay`,
 iPad and Apple TV with Zwift, Assioma pedals, HR strap. Mac for builds and captures.
 
@@ -159,6 +160,11 @@ Map of the touch points: Explore report 2026-11-18 (`BLERelayManager`, `BikeMetr
   config = HR + trainer + power meter + Zwift + WebUI on Touch; re-baseline 1.8.2 with
   HR + power meter (no mirror) first; AGENT_FEATURES gate as target, G7 as hard minimum;
   if only G7 passes, the maintainer decides (ship default-off vs. reduce first).
+  Re-baseline measured 2026-11-18 (`logs/d4_base_pm_20261118-202146.log`, HEAP_BENCHMARK):
+  steady 50.6 KB (range 49.96–50.64), lowest since boot 42.4 KB (at the first WebUI
+  connect), largest block 31.7 KB. ESTIMATE with the mirror (−1 KB static, −6–10 KB GATT,
+  −1–2 KB trainer link): steady ~38–43, lowest ~29–34 KB — both around the target;
+  the early smoke test (work package 5) decides.
 - **D5 Gate and variants.** Recommended: `HW_ENABLE_TRAINER_MIRROR` default 0; build.sh
   option `--trainer` (test builds, like `--fan-power`) writes `-DBBS_COMPILE_TRAINER=1`
   into `build_opt.h`, and on Touch (`display == 1`) `-DBBS_TRAINER_PSRAM=1`;
@@ -181,7 +187,8 @@ Map of the touch points: Explore report 2026-11-18 (`BLERelayManager`, `BikeMetr
 ### Preconditions
 - Maintainer commits the BBS M1 work and the pending Homewind changes (1.8.2 bump,
   whitespace in `BLERelayManager.cpp`, `HEAP_BENCHMARK.md` row) so M2a reviews alone.
-- D1–D8 decided; D4 re-baseline measured (HR + power meter, 1.8.2, Touch).
+- D1–D8 decided; D4 re-baseline measured (HR + power meter, 1.8.2, Touch). Done
+  2026-11-18 (commits pushed, baseline in D4).
 
 ### Work packages (in this order; host tests where logic is testable, both variants build)
 1. **Build + gate:** `Config.h` flag + `#error` checks, `build.sh` option and per-variant
@@ -233,6 +240,136 @@ case config with heap sampling. Not with the serial `t` command during rides.
 ### Out of scope for M2a
 M2b′ cadence composition toward the app, M3 hardening, priority UI (if D2 as
 recommended), version bumps/releases (maintainer).
+
+### M2a progress (2026-11-18, not on hardware)
+Done: work packages 1–4, the API subset of 7 (`trainer/setup|enable|forget`, `GET
+trainer/status`; no frame 0x0F) and the PSRAM boot line of 9 (serial-command builds).
+BBS: `begin()` reads along 0x2A63 with the mirror; `trainerPower()` + callback; trainer
+crank = third cadence source (so trainer cadence already reaches `BIKE_METRICS` and the
+fan cadence path, flagged as not from Power; package 6 refines). Factory reset bit 2 =
+`trainerForget()` failed. Open: 5, 6, frame + docs of 7, 8, counters of 9, 10.
+Decided 2026-11-18 (maintainer): a released trainer (`trn_on=0`, `trn_dev` stored) keeps
+counting for the device rule and its MAC stays blocked as a sensor; `forget` frees it.
+BBS budget 4,100 (4,078 counted). Review fixes: (1) after an event FIFO overflow, a setup
+still `running` while the trainer left SETUP ends as `link_failed`; (2) setup OK with
+maintenance admission closed reports `store_failed`; (3) `sensor/set` is refused (busy)
+while a trainer setup runs.
+
+Package 5 (smoke test) PASSED 2026-11-18, Touch diagnostic build 20261118-220448-trainer
+(`logs/m2a_smoke_20261118-220740.log`): setup via curl first refused by the device rule
+(HR + CSC + power meter configured — correct), after removing CSC `ok` in ~15 s; restart →
+mirror on, state `ready`, "Trainer runtime in PSRAM"; Zwift Apple TV on the mirror the
+whole ride. Heap with HR + NEO mirror + power meter + fan + Zwift + WebUI, 16 min ride:
+steady 41.1–41.6 KB (target ≥ 40), lowest since boot 35.3 KB (≥ 30), largest block
+30.7 KB (≥ 25) — D4 target met (cost vs. the re-baseline: ~9 KB steady, ~7 KB lowest).
+Open: after the restarts the power meter (Assioma) stayed disconnected until removed
+and added again; it was already disconnected before the setup (mirror off). Not seen in
+this build's log (no sensor events) — check in G7 with sensor-event logging.
+
+Part 2 (packages 6–10) implemented 2026-11-18, not on hardware; BBS unchanged.
+6: `hw::bikePowerFromTrainer()` (D2, `BikeMetrics.h`) in `updateBikeMetrics()` and the fan
+feed (trainer power callback → `onPowerSample` only while no power meter is connected);
+`BIKE_METRICS` bit 3 = power from the trainer; Hybrid accepts the trainer (FanHRAdapter:
+`mirror`; API/WebUI: mirrored, or enabled and set up); `selectBikeCard()` takes trainer
+configured/ready (Touch shows its power and name). 7: frame `TRAINER_STATUS` 0x0F
+`[state][flags][setup][name]` (flags: app, mirror, enabled, set up); `trainer/setup` also
+takes `generation` + `index` (the WebUI has no MAC); docs. 8: Trainer row as § 5; the
+power-slot notice compares the sensor list before and after the setup (the slot removal
+at setup end now also marks `SENSORS_SNAPSHOT` while the dialog has the server paused).
+9: serial `s` trainer counters; sensor connected/disconnected/failed at error level in
+serial-command builds. Assioma: no code change; see the report (stale address with name
+fallback not matching is the most plausible cause; the new logs show it).
+Part 2 independent review 2026-11-18: one blocker fixed (the WebUI offers the configured
+power sensor as trainer, D8, and the trainer Add button does not count that slot), plus:
+setup watch before the request, setup result reset on Release/Forget, Forget confirm,
+configured sensors hidden from the trainer search, `_trainerSetupScan` cleared after an
+event overflow without a running setup, and in BBS `releaseCapacity()` when a trainer or
+setup link ends (host test; BBS 4,086 / 4,100). Assioma still open: a capacity wait retries
+after `BBS_CAPACITY_RETRY_MS` (60 s) anyway, so it alone cannot explain the ~10 min
+outage; candidates: repeated capacity failures, stale address/name fallback, or another
+central holding the pedals. Check with the sensor-event logs (serial-command build).
+Slot diagnostics 2026-11-18: `SensorInfo` carries `failCount`, `nameFallback`, `capWait`,
+`capReason` (BBS 4,091 / 4,100); serial `s` prints one line per slot (state, MAC, address
+type, fails, capacity wait, name fallback, last disconnect, name) and the BLE counters.
+First reading (diagnostic build 20261118-234429-trainer, pedals idle): PWR `state=2`
+(WAIT_SCAN), random address, name fallback on, no fails, no capacity wait.
+
+Part 2 hardware test 2026-11-19 (Touch, NEO 2T, Assioma): passed. WebUI setup of a NEO in
+the power slot (listed first with the power-slot hint, slot removed, notices shown);
+restart → mirror on; the device rule disabled the CSC Add; D2 both ways (Assioma
+asleep/disconnected → Touch shows Tacx and the fans follow trainer power; Assioma back →
+Assioma wins); Release → restart → mirror off, trainer kept; Assioma reconnected 6 s after
+reboot. UX follow-ups 2026-11-19 (WebUI only, API unchanged): automatic restart after a
+successful setup, Release/Mirror and Forget once `TRAINER_STATUS` shows the stored change,
+unless an app is connected (then the Restart button stays; frame `APP_STATUS` 0x10 counts
+apps on the mirror and on the plain relay, closing the gap of the 0x0F flag, which covers only
+the mirror and remains the fallback for firmware without 0x10); advertising is paused
+only while a search runs, no longer while "Setup Sensors" is open (the overview re-renders
+only when its content changed, since `SENSORS_SNAPSHOT` then arrives every second); rows the
+device rule blocks are greyed; short trainer button labels (Restart, Release/Mirror,
+Forget; "Restart Homewind to apply the change." in the row); trainer list subtitle "Select
+your trainer (not a power meter)".
+Review fixes 2026-11-19 (WebUI only): a 20 s search watchdog and a resume on every WebSocket
+(re)connect outside a search keep advertising from staying paused; no overview re-render over
+the restart or error dialogs; a Release/Forget restart unconfirmed after 10 s shows "not
+saved"; no auto-restart while a setup runs.
+Re-enable after Release (Mirror → restart) passed 2026-11-19: `state=ready`, mirror on,
+app connected, "Trainer runtime in PSRAM".
+Re-test 2026-11-19 evening (diagnostic Touch `--trainer` with icons, badges, bike card,
+`APP_STATUS`; log `m2a_g7_20261119-193737`): passed — auto-restart after Release; no
+auto-restart after Mirror with Zwift on the plain relay only (Restart button, manual restart);
+Forget → Cancel (no change); Forget → auto-restart; new setup with advertising on (ok in
+~10 s, auto-restart, mirror ready); Zwift finds Homewind with "Setup Sensors" open; live
+dialog; device-rule greying; subtitle. Not checked: Homewind hidden from Zwift during a search.
+G7 2026-11-19 (61 min, HR + NEO mirror + Assioma + fan + Zwift on the mirror + WebUI on one
+device): passed — steady 41.2–43.3 KB (≥ 40), min since boot 30.3 KB (≥ 30, tight),
+largest block 29.7 KB (≥ 25); no link loss, no restart. Idle day run: largest block fell
+to 22.5 KB while the WebUI was opened from several devices; a controlled test showed WebUI
+loads on 2–3 devices cost ~12 KB transiently (min since boot 42.0 → 29.7 KB). Watch before
+release: WebUI multi-device fragmentation. Also seen in G7 (~21:15): opening the WebUI on the
+phone (2nd client, limit `HW_WEBSOCKET_MAX_CLIENTS` 2) froze the laptop's values while its
+indicator still said "Connected"; a reload fixed it. Likely a stalled WebSocket (send queue
+during the phone's page load) the WebUI does not detect. Proposed: WebUI reconnects when no
+frame arrives for a few seconds; reproduce with WebSocket event logging first.
+Reproduction 2026-11-20 without a ride (log `wsfreeze_20261120-072240`, per-client queue
+logging): laptop + phone, 8 fast phone reloads, phone locked (iOS closed cleanly), third
+client rejected — no freeze, queues always 0; reloads dipped the largest block to 22.5 KB
+(recovers to 31.7 KB). Fix anyway (WebUI only): no frame for 45 s (`SYSTEM_STATUS` every
+30 s) drops the socket, shows "Disconnected" and reconnects.
+XIAO without PSRAM 2026-11-20 (diagnostic Basic `--trainer`, log `xiao_trainer2_20261120-081903`,
+`HEAP_BENCHMARK.md`): erase, setup HR + Assioma + NEO, ~20 min ride with Zwift on the mirror
+passed functionally (no restart, ERG ok, dropped=6 at the Assioma connect); steady 54–56 KB
+free. But WebUI page loads drained internal RAM to < 1 KB (cold load, second device) and a
+laptop that stopped acking held ~25 KB until it reconnected: not release-ready until page
+serving is cheaper (next task). Factory reset passed (everything erased, AP mode); its report
+was gone after the WiFi setup reboot — fixed: kept for two boots. Re-test passed: after the
+WiFi setup `maintenance/status` shows `factory_reset {attempted:1, failed_mask:0}`, and the reset
+dialog left open on the Mac switched to "Factory Reset Complete" once the device was back.
+Page-serving cost found the same day (`HEAP_BENCHMARK.md`): not the assets but
+`telemetry/refresh` — with Nagle off (AsyncWebServer default) every small WS frame took its own
+TCP segment, up to ~43 KB per refresh with two clients. Fixed: `setNoDelay(false)` on WS
+connections (2–12 KB), plus no refresh at WebUI script start and no favicon request. Control run
+with all fixes (log `xiao_fix_20261120-095221`): laptop reload + iPhone private-tab cold load with
+two clients → min since boot 24.3 KB (before: 0.3–2 KB).
+Trainer `dropped` 2026-11-19/20 (same log): 7 after the 20:23 restart while HR, Assioma, NEO
+and Zwift reconnected; 0 during G7; 18 between 01:39 and 01:54, matching the Assioma
+wake-up at 01:45 (connect, disconnect after 5 s, failed reconnect). Pattern: losses while
+another sensor connects (~2 s of NEO data at ~10/s). The counter aggregates the trainer
+NOTIFY queue, app writes not forwarded, indication timeout or buffer full, and failed app
+notifies/indications (`BBSTrainer.h`), so the cause is not attributable. M3 diagnostic: split
+`dropped` per cause (BBS contract + budget, 4,091 / 4,100). Likely mechanism (code, not yet
+measured): a sensor's GATT pass (`BBSCore::gattStep` → `gattPass`, blocking NimBLE calls, budget
+`BBS_GATT_BUDGET_MS` 8 s) runs on the `update()` task that drains the trainer queue; NOTIFYs may use
+40 of 48 slots, so a pass longer than ~2 s at the NEO's rate drops them. Confirmed again on the XIAO
+(dropped=6 at the Assioma connect). M3 options: time the pass first; then a non-blocking pass or
+relaying trainer notifications without `update()`.
+Later feature (maintainer, 2026-11-19): trainer detection in the setup search. The BBS scan
+decoder only knows 0x180D/0x1816/0x1818, so a power meter and a trainer look alike. Plan:
+BBS reports "likely trainer" per scan result when ADV or SCAN_RSP lists FTMS 0x1826, the
+Tacx FE-C UUID or a Wahoo UUID; the WebUI lists those first with a trainer icon and the
+rest greyed ("probably a power meter") but still selectable — no hard filter (the KICKR
+2017 has no FTMS, only 0x1818 + Wahoo services). Needs a BBS→Homewind contract field and
+a small BBS budget raise (4,091 / 4,100). Bundle with the WebUI layout pass (new icons).
 
 ## Report format
 What was done, logs and numbers, open points, proposed next step. No release or

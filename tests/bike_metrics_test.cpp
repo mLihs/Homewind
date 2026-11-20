@@ -79,6 +79,22 @@ static void testStaleValues() {
         makeBikeMetrics(false, 210, 60000, false, 0, 0, false));
 }
 
+static void testPowerFromTrainer() {
+  // D2: the power meter wins while connected, also before its first sample
+  CHECK(!bikePowerFromTrainer(true, true));
+  CHECK(!bikePowerFromTrainer(true, false));
+  CHECK(bikePowerFromTrainer(false, true));
+  CHECK(!bikePowerFromTrainer(false, false));
+  BikeMetrics m = makeBikeMetrics(true, 180, 0, true, 90, 0, false, true);
+  CHECK(m.flags == (kBikePowerValid | kBikeCadenceValid | kBikePowerFromTrainer));
+  uint8_t buf[kBikeMetricsPayloadLen] = {};
+  CHECK(encodeBikeMetrics(m, buf, sizeof(buf)) == kBikeMetricsPayloadLen);
+  CHECK(buf[4] == 0x0B);
+  // Only with valid power; a source change is a change
+  CHECK(makeBikeMetrics(false, 0, 0, true, 90, 0, false, true).flags == kBikeCadenceValid);
+  CHECK(m != makeBikeMetrics(true, 180, 0, true, 90, 0, false));
+}
+
 static void testBufferTooSmall() {
   uint8_t buf[4] = {1, 2, 3, 4};
   CHECK(encodeBikeMetrics(makeBikeMetrics(true, 1, 0, true, 1, 0, true), buf, sizeof(buf)) == 0);
@@ -93,6 +109,7 @@ int main() {
   testChangeDetection();
   testCadenceFromPowerWithoutCadence();
   testStaleValues();
+  testPowerFromTrainer();
   testBufferTooSmall();
   if (g_failures) {
     std::printf("bike_metrics_test: %d failure(s)\n", g_failures);

@@ -37,7 +37,7 @@ Workspace copies of `HomeWindWSAmoled`, `NimBLE-Arduino` (patched 2.5.2), `Smart
 
 Every successful build refreshes `build/<board>/manifest.json` for ESP Web Tools. `--no-deploy` skips only the website copy. `--clean` deletes the object cache before compiling.
 
-From 1.8.0, release builds enable fan modes Pure / Smart / Hybrid by default (`HW_ENABLE_FAN_POWER_MODE=1` in `Config.h`). `--fan-power` still forces the gate on for a test stamp (build id ends in `-fanpower`) and requires `--no-deploy`. Concept: `docs/FAN_POWER_HR_CONCEPT.md`.
+From 1.8.0, release builds enable fan modes Pure / Smart / Hybrid by default (`HW_ENABLE_FAN_POWER_MODE=1` in `Config.h`). From 2.0.0, release builds also enable the trainer mirror (`HW_ENABLE_TRAINER_MIRROR` + `BBS_COMPILE_TRAINER` in `build_opt.h`; Touch adds `BBS_TRAINER_PSRAM`). `--fan-power` / `--trainer` only add a build-id stamp and require `--no-deploy`. Concept: `docs/FAN_POWER_HR_CONCEPT.md`, `docs/TRAINER_PROXY_DESIGN.md`.
 
 Outputs:
 
@@ -121,7 +121,7 @@ With `--deploy`, files are also copied to:
 
 ## build_webui.py
 
-Generates PROGMEM headers from `webui_src/` for the embedded web interface (GZIP-compressed).
+Generates the PROGMEM header for the embedded web interface: `app.css` and `app.js` inlined into `index.html`, GZIP-compressed. Needs `npx` (Terser, Lightning CSS) and `zopfli` (`brew install zopfli`); the build fails without them.
 
 ## watch_webui.py
 

@@ -78,6 +78,11 @@ static void maintenanceGateWrapper(AsyncWebServerRequest* request, void (*handle
   if (!request || !handler) {
     return;
   }
+
+  // CSRF: POSTs from other origins cannot set this header without a failing preflight
+  if (!WebHelpers::requireHomewindHeader(request)) {
+    return;
+  }
   
   // If maintenance not active, allow request
   if (!MaintenanceMode::isActive()) {
@@ -159,11 +164,23 @@ void ApiActions::registerRoutes(void* serverPtr) {
     maintenanceGateWrapper(req, handleFanRemove);
   });
   
-  // Firmware actions (whitelisted - no gate wrapper)
-  server->on("/api/v1/action/firmware/search", HTTP_POST, handleFirmwareSearch);
-  server->on("/api/v1/action/firmware/download", HTTP_POST, handleFirmwareDownload);
-  server->on("/api/v1/action/firmware/install", HTTP_POST, handleFirmwareInstall);
-  server->on("/api/v1/action/firmware/abort", HTTP_POST, handleFirmwareAbort);
+  // Firmware actions (whitelisted for maintenance; still need X-Homewind on POST)
+  server->on("/api/v1/action/firmware/search", HTTP_POST, [](AsyncWebServerRequest* req) {
+    if (!WebHelpers::requireHomewindHeader(req)) return;
+    handleFirmwareSearch(req);
+  });
+  server->on("/api/v1/action/firmware/download", HTTP_POST, [](AsyncWebServerRequest* req) {
+    if (!WebHelpers::requireHomewindHeader(req)) return;
+    handleFirmwareDownload(req);
+  });
+  server->on("/api/v1/action/firmware/install", HTTP_POST, [](AsyncWebServerRequest* req) {
+    if (!WebHelpers::requireHomewindHeader(req)) return;
+    handleFirmwareInstall(req);
+  });
+  server->on("/api/v1/action/firmware/abort", HTTP_POST, [](AsyncWebServerRequest* req) {
+    if (!WebHelpers::requireHomewindHeader(req)) return;
+    handleFirmwareAbort(req);
+  });
   server->on("/api/v1/action/firmware/status", HTTP_GET, handleFirmwareStatus);
   
   // System info (gated via wrapper)
@@ -171,13 +188,22 @@ void ApiActions::registerRoutes(void* serverPtr) {
     maintenanceGateWrapper(req, handleSystemInfo);
   });
   
-  // Maintenance mode debug endpoints (whitelisted by definition - no gate wrapper)
-  server->on("/api/v1/action/system/maintenance/begin", HTTP_POST, handleMaintenanceBegin);
-  server->on("/api/v1/action/system/maintenance/end", HTTP_POST, handleMaintenanceEnd);
+  // Maintenance mode debug endpoints (whitelisted; POST still needs X-Homewind)
+  server->on("/api/v1/action/system/maintenance/begin", HTTP_POST, [](AsyncWebServerRequest* req) {
+    if (!WebHelpers::requireHomewindHeader(req)) return;
+    handleMaintenanceBegin(req);
+  });
+  server->on("/api/v1/action/system/maintenance/end", HTTP_POST, [](AsyncWebServerRequest* req) {
+    if (!WebHelpers::requireHomewindHeader(req)) return;
+    handleMaintenanceEnd(req);
+  });
   server->on("/api/v1/action/system/maintenance/status", HTTP_GET, handleMaintenanceStatus);
   
   // System actions
-  server->on("/api/v1/action/system/factory_reset", HTTP_POST, handleFactoryReset);  // whitelisted
+  server->on("/api/v1/action/system/factory_reset", HTTP_POST, [](AsyncWebServerRequest* req) {
+    if (!WebHelpers::requireHomewindHeader(req)) return;
+    handleFactoryReset(req);
+  });
   server->on("/api/v1/action/system/wifi_reset", HTTP_POST, [](AsyncWebServerRequest* req) {
     maintenanceGateWrapper(req, handleWifiReset);
   });
@@ -196,6 +222,20 @@ void ApiActions::registerRoutes(void* serverPtr) {
 #if HW_ENABLE_FAN_POWER_MODE
   server->on("/api/v1/action/fanmode/set", HTTP_POST, [](AsyncWebServerRequest* req) {
     maintenanceGateWrapper(req, handleFanModeSet);
+  });
+#endif
+#if HW_ENABLE_TRAINER_MIRROR
+  server->on("/api/v1/action/trainer/setup", HTTP_POST, [](AsyncWebServerRequest* req) {
+    maintenanceGateWrapper(req, handleTrainerSetup);
+  });
+  server->on("/api/v1/action/trainer/enable", HTTP_POST, [](AsyncWebServerRequest* req) {
+    maintenanceGateWrapper(req, handleTrainerEnable);
+  });
+  server->on("/api/v1/action/trainer/forget", HTTP_POST, [](AsyncWebServerRequest* req) {
+    maintenanceGateWrapper(req, handleTrainerForget);
+  });
+  server->on("/api/v1/action/trainer/status", HTTP_GET, [](AsyncWebServerRequest* req) {
+    maintenanceGateWrapper(req, handleTrainerStatus);
   });
 #endif
   
@@ -473,6 +513,20 @@ static void sendBleEnqueueResult(AsyncWebServerRequest* request, BleEnqueueResul
     case BleEnqueueResult::CLOSED:
       request->send(409, "text/plain", "Maintenance active");
       break;
+#if HW_ENABLE_TRAINER_MIRROR
+    case BleEnqueueResult::TOO_MANY:
+      request->send(409, "text/plain", "Besides the heart-rate strap, at most two devices");
+      break;
+    case BleEnqueueResult::TRAINER_MAC:
+      request->send(409, "text/plain", "This device is the trainer");
+      break;
+    case BleEnqueueResult::BUSY:
+      request->send(409, "text/plain", "Discovery or trainer setup running");
+      break;
+    case BleEnqueueResult::NO_TRAINER:
+      request->send(409, "text/plain", "No trainer set up");
+      break;
+#endif
   }
 }
 #endif
@@ -1399,6 +1453,18 @@ static bool sensorConfigured(BikeSensor::SensorType type) {
   return BikeSensor::info(type, info) && info.state != BikeSensor::SlotState::EMPTY;
 }
 
+// D2: the trainer is a power source while mirrored, or set up for the next boot.
+static bool trainerConfigured() {
+#if HW_ENABLE_TRAINER_MIRROR
+  if (!g_bleRelayManager) return false;
+  BLERelayManager::TrainerStatus s;
+  g_bleRelayManager->trainerStatus(s);
+  return s.mirror || (s.enabled && s.mac[0] != '\0');
+#else
+  return false;
+#endif
+}
+
 // mode: pure|smart|hybrid, ftp: watts (clamped to 100..500), cooldown: -2..2; all optional,
 // applied together.
 // Values are read back through the FAN_CONTROL frame.
@@ -1459,7 +1525,7 @@ void ApiActions::handleFanModeSet(AsyncWebServerRequest* request) {
     const char* reason = nullptr;
     if (!sensorConfigured(BikeSensor::SensorType::HEART_RATE)) {
       reason = "no_hr_sensor";
-    } else if (!sensorConfigured(BikeSensor::SensorType::POWER)) {
+    } else if (!sensorConfigured(BikeSensor::SensorType::POWER) && !trainerConfigured()) {
       reason = "no_power_source";
     } else if (maxHr <= minHr || maxHr - minHr < hw::kFanMinSpanBpm) {
       reason = "hr_span_too_small";
@@ -1482,6 +1548,99 @@ void ApiActions::handleFanModeSet(AsyncWebServerRequest* request) {
   }
 }
 #endif // HW_ENABLE_FAN_POWER_MODE
+
+#if HW_ENABLE_TRAINER_MIRROR
+// Trainer mirror (AGENT_TRAINER_MIRROR.md Task 4). setup/enable/forget are applied
+// by BLERelayManager::loop(); setup and enable take effect after system/restart.
+void ApiActions::handleTrainerSetup(AsyncWebServerRequest* request) {
+  if (!checkSystemReady() || !g_bleRelayManager || !g_bleRelayManager->ready()) {
+    sendError(request, 503, "BLE service not available");
+    return;
+  }
+  // WebUI: generation + index of DISCOVERY_RESULTS instead of mac + name.
+  int index = 0;
+  if (request->hasParam("index", true) || request->hasParam("index")) {
+    char genStr[12];
+    char* end = nullptr;
+    const unsigned long generation =
+        WebHelpers::getParamToBuffer(request, "generation", genStr, sizeof(genStr), false)
+            ? strtoul(genStr, &end, 10) : 0;
+    if (!getIntParam(request, "index", index, true)) {
+      return;
+    }
+    if (!end || end == genStr || *end != '\0' || index < 0 || index > 255) {
+      sendError(request, 400, "Invalid generation or index");
+      return;
+    }
+    sendBleEnqueueResult(request, g_bleRelayManager->enqueueTrainerSetupFromDiscovery(
+        static_cast<uint32_t>(generation), static_cast<uint8_t>(index)));
+    return;
+  }
+  char mac[20];
+  if (!WebHelpers::getParamToBuffer(request, "mac", mac, sizeof(mac)) || !hw::bleAddressValid(mac, 0)) {
+    sendError(request, 400, "Invalid mac");
+    return;
+  }
+  // Sent unescaped in trainer/status JSON.
+  char name[33];
+  WebHelpers::getParamToBuffer(request, "name", name, sizeof(name));
+  bool nameOk = strlen(name) < sizeof(name) - 1;
+  for (const char* c = name; *c; c++) {
+    if (*c == '"' || *c == '\\' || static_cast<unsigned char>(*c) < 0x20) nameOk = false;
+  }
+  if (!nameOk) {
+    sendError(request, 400, "Invalid name");
+    return;
+  }
+  sendBleEnqueueResult(request, g_bleRelayManager->enqueueTrainerSetup(mac, name));
+}
+
+void ApiActions::handleTrainerEnable(AsyncWebServerRequest* request) {
+  if (!checkSystemReady() || !g_bleRelayManager || !g_bleRelayManager->ready()) {
+    sendError(request, 503, "BLE service not available");
+    return;
+  }
+  bool on = false;
+  if (!getBoolParam(request, "on", on, true)) {
+    return;
+  }
+  sendBleEnqueueResult(request, g_bleRelayManager->enqueueTrainerEnable(on));
+}
+
+void ApiActions::handleTrainerForget(AsyncWebServerRequest* request) {
+  if (!checkSystemReady() || !g_bleRelayManager || !g_bleRelayManager->ready()) {
+    sendError(request, 503, "BLE service not available");
+    return;
+  }
+  sendBleEnqueueResult(request, g_bleRelayManager->enqueueTrainerForget());
+}
+
+// enabled: NVS trn_on (next boot); mirror: this boot mirrors the trainer.
+void ApiActions::handleTrainerStatus(AsyncWebServerRequest* request) {
+  if (!g_bleRelayManager || !g_bleRelayManager->ready()) {
+    sendError(request, 503, "BLE service not available");
+    return;
+  }
+  static const char* const kStates[] = {"off", "waiting", "connecting", "discovering", "ready", "changed", "setup"};
+  static const char* const kChecks[] = {"ok", "not_found", "link_failed", "too_large", "empty",
+                                        "empty_service", "no_cccd", "missing_advertised", "store_failed"};
+  BLERelayManager::TrainerStatus s;
+  g_bleRelayManager->trainerStatus(s);
+  const char* setup = s.setup < sizeof(kChecks) / sizeof(kChecks[0]) ? kChecks[s.setup]
+                      : s.setup == BLERelayManager::kTrainerSetupRunning ? "running"
+                      : s.setup == BLERelayManager::kTrainerSetupBusy    ? "busy"
+                      : s.setup == BLERelayManager::kTrainerSetupRule    ? "device_rule"
+                                                                         : "idle";
+  const char* state = s.state < sizeof(kStates) / sizeof(kStates[0]) ? kStates[s.state] : "unknown";
+  char json[224];
+  snprintf(json, sizeof(json),
+           "{\"enabled\":%s,\"mirror\":%s,\"state\":\"%s\",\"app_connected\":%s,\"setup\":\"%s\","
+           "\"name\":\"%s\",\"mac\":\"%s\"}",
+           s.enabled ? "true" : "false", s.mirror ? "true" : "false", state,
+           s.appConnected ? "true" : "false", setup, s.name, s.mac);
+  sendJSON(request, 200, json);
+}
+#endif
 
 void ApiActions::handleTelemetryRefresh(AsyncWebServerRequest* request) {
   if (!checkSystemReady()) {
@@ -1512,6 +1671,9 @@ void ApiActions::handleTelemetryRefresh(AsyncWebServerRequest* request) {
   g_webSocketTelemetry->markDirty(TelemetryFrameType::HEART_RATE_SETTINGS);
 #if HW_ENABLE_FAN_POWER_MODE
   g_webSocketTelemetry->markDirty(TelemetryFrameType::FAN_CONTROL);
+#endif
+#if HW_ENABLE_TRAINER_MIRROR
+  g_webSocketTelemetry->markDirty(TelemetryFrameType::TRAINER_STATUS);
 #endif
 
   // If the UI provides its WS client_id (sent via a small WS control frame),

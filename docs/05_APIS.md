@@ -35,14 +35,13 @@ All static assets are served automatically from PROGMEM.
 |-------|-------|-------------|
 | `GET /` | `index.html` | Main web UI |
 | `GET /index.html` | `index.html` | Main web UI |
-| `GET /app.css` | `app.css` | Stylesheet |
-| `GET /app.js` | `app.js` | JavaScript application |
+
+`app.css` and `app.js` are inlined into `index.html` at build time, so the whole UI is one request.
 
 **Features**:
 - Automatic GZIP compression
 - ETag support (304 Not Modified)
-- Cache-Control headers
-- Cache-busting via query parameter (`?v=HASH`)
+- Cache-Control: `no-cache` (revalidated via ETag on every load)
 
 ---
 
@@ -51,6 +50,8 @@ All static assets are served automatically from PROGMEM.
 **File**: `src/web/ApiActions.cpp`
 
 All action endpoints use **POST** method with form-urlencoded parameters.
+
+**CSRF:** Every POST under `/api/v1/action/*` and `POST /api/v1/settings/set` requires the header `X-Homewind: 1`. Without it the device answers `403 Forbidden`. The WebUI sends it automatically. From curl: `-H 'X-Homewind: 1'`.
 
 ### Sensor Actions
 
@@ -158,7 +159,7 @@ Reload all sensors from NVS configuration and reconnect them.
 ```
 POST /api/v1/action/sensor/server/pause
 ```
-Pause BLE server (stop advertising, disconnect clients).
+Pause BLE server (stop advertising, disconnect clients). The WebUI pauses for a sensor search; the pause ends on its own 30 s after the last pause request, so a page closed during a search does not leave the relay paused.
 
 **Response**: `"OK"` or `"ERR:<message>"`
 
@@ -221,6 +222,30 @@ Add a fan to configuration. The fan will be automatically discovered and connect
 - `503 Service Unavailable`: System not ready
 
 **Initial State**: Newly added fans start in **ERROR** state until discovery and handshake complete. The WebSocket `FANS_SNAPSHOT` will show `connected=0` until the fan is successfully connected.
+
+##### Adding a fan from the Token Extractor (or any external tool)
+
+Homewind has **no** dedicated Token-App protocol, deep link, or auto-pairing. The supported “one button → fan on Homewind” path is this same HTTP action.
+
+Typical user flows:
+
+1. **Manual (documented for end users):** copy the 32-character token from the [Xiaomi Cloud Token Extractor](https://github.com/mLihs/GUI-Miio-Tokenextrator-All-Plattforms) into the WebUI **Fans** section.
+2. **Direct push (for Token-App / integrator concepts):** the app POSTs the token to a Homewind on the LAN.
+
+What the Token App (or curl) must do:
+
+1. Resolve the device: IP address, or mDNS `homewind-<8 hex from MAC>.local` (HTTP service on port 80).
+2. Call:
+
+```bash
+curl -X POST "http://homewind-XXXXXXXX.local/api/v1/action/fan/add?token=<32-hex>" \
+  -H "X-Homewind: 1"
+```
+
+3. Treat `OK` as success; show `ERR:…` / HTTP status to the user (400 bad token, 409 full / maintenance, 503 not ready).
+4. If several Homewinds are on the LAN, let the user pick the target before POSTing.
+
+Homewind then discovers and connects the fan on its own. There is no second handshake with the Token App.
 
 ---
 
@@ -325,7 +350,46 @@ Set the fan control mode, the FTP used by Hybrid and the cool-down of Smart and 
 - `409 Conflict`: `mode=hybrid` without its preconditions, body `{"ok":false,"error":"no_hr_sensor"}`, `"no_power_source"` or `"hr_span_too_small"` (max HR − min HR < 30 bpm); or `{"ok":false,"error":"maintenance_active"}`
 - `503 Service Unavailable`: System not ready or settings not available
 
-**Note**: The sensors only need to be configured, not connected. If a precondition is lost later, the stored mode stays Hybrid and the fans run as Smart until it is back (`FAN_CONTROL` `effective`/`reason`).
+**Note**: The sensors only need to be configured, not connected. If a precondition is lost later, the stored mode stays Hybrid and the fans run as Smart until it is back (`FAN_CONTROL` `effective`/`reason`). In trainer firmware (`--trainer`), the trainer is a power source too (`no_power_source` only without a power meter and without a trainer that is mirrored or enabled); the fans use its power while no power meter is connected (D2).
+
+---
+
+### Trainer Actions (trainer firmware only)
+
+Enabled in every release build from 2.0 (`HW_ENABLE_TRAINER_MIRROR=1` + `BBS_COMPILE_TRAINER` via `tools/build.sh`); design `docs/TRAINER_PROXY_DESIGN.md`, spec `docs/AGENT_TRAINER_MIRROR.md` Task 4. Setup and enable take effect after `system/restart`. Device rule: besides the heart-rate strap, at most two of cadence sensor, power meter and trainer (a released trainer still counts).
+
+#### Trainer Setup
+```
+POST /api/v1/action/trainer/setup?generation=<gen>&index=<n>
+POST /api/v1/action/trainer/setup?mac=<aa:bb:cc:dd:ee:ff>&name=<name>
+```
+Reads the trainer's GATT into the mirror table (a 5 s scan for its advertising, then a link). `generation` + `index` pick a record of the last `DISCOVERY_RESULTS` (WebUI); `name` (optional, ≤ 31 bytes, no `"`, `\` or control characters) is only shown. A sensor slot holding the trainer's MAC is removed. Result in `trainer/status` `setup` and the `TRAINER_STATUS` frame; OK enables the mirror for the next boot.
+
+**Response**: `200` `"OK"` (queued). **Status Codes**: `400` invalid `mac`, `name`, `generation` or `index`; `409` `Besides the heart-rate strap, at most two devices`, `Discovery or trainer setup running`, `Discovery result no longer valid`, `Maintenance active`; `503` BLE not available.
+
+#### Trainer Enable
+```
+POST /api/v1/action/trainer/enable?on=<true|false>
+```
+`on=false` releases the trainer (no mirror after the next restart, the stored table stays); `on=true` mirrors it again. **409** `No trainer set up` for `on=true` without a stored trainer.
+
+#### Trainer Forget
+```
+POST /api/v1/action/trainer/forget
+```
+Erases the stored trainer and its table; the mirror stops after the next restart.
+
+#### Trainer Status
+```
+GET /api/v1/action/trainer/status
+```
+**Response** (`application/json`):
+```
+{"enabled":true,"mirror":true,"state":"ready","app_connected":false,"setup":"idle","name":"NEO 2T","mac":"aa:bb:cc:dd:ee:ff"}
+```
+- `enabled`: mirror after the next restart (NVS `trn_on`); `mirror`: this boot mirrors the trainer
+- `state`: `off`, `waiting`, `connecting`, `discovering`, `ready`, `changed` (GATT changed: run the setup again), `setup`
+- `setup`: last setup this boot: `ok`, `not_found`, `link_failed`, `too_large`, `empty`, `empty_service`, `no_cccd`, `missing_advertised`, `store_failed`, `running`, `busy`, `device_rule`, `idle`
 
 ---
 
@@ -506,7 +570,7 @@ Enters maintenance (reason `factory_reset`). After the main loop has stopped fan
 - `202 Accepted`: Admitted (also when already admitted)
 - `409 Conflict`: Other maintenance running (e.g. OTA download)
 
-**Result**: Only known after the reboot: `maintenance/status` reports `factory_reset.attempted` and `factory_reset.failed_mask` (bit 0 settings, bit 1 WiFi).
+**Result**: Only known after the reboot: `maintenance/status` reports `factory_reset.attempted` and `factory_reset.failed_mask` (bit 0 settings, bit 1 WiFi, bit 2 trainer table: `trainerForget()` failed, trainer firmware only). The report stays for two boots: the access-point boot right after the reset and the boot after the WiFi setup; a power cut clears it.
 
 ---
 
@@ -643,6 +707,8 @@ Sent only when state changes (marked dirty).
 | `HEART_RATE_SETTINGS` | `0x0B` | Heart rate min/max settings | `[min:uint16][max:uint16]` |
 | `BIKE_METRICS` | `0x0D` | Power and cadence | `[power_w:int16][cadence_rpm:uint16][flags:uint8]` |
 | `FAN_CONTROL` | `0x0E` | Fan mode and target (test firmware only) | `[mode][effective][reason][target_on][target_pct][dominant][power_state][ftp_w:uint16][cooldown:int8]` |
+| `TRAINER_STATUS` | `0x0F` | Trainer mirror status (trainer firmware only) | `[state:uint8][flags:uint8][setup:uint8][name_len:uint8][name:bytes]` |
+| `APP_STATUS` | `0x10` | Apps (BLE centrals) connected to Homewind, relay or mirror (BLE firmware) | `[apps:uint8]` |
 
 ---
 
@@ -805,7 +871,8 @@ const connected = frame[13];
 ```
 [power_w:int16]           // Power in watts (signed, little-endian), 0 if invalid or older than 3 s
 [cadence_rpm:uint16]      // Cadence in rpm (little-endian), 0 if invalid or older than 3 s
-[flags:uint8]             // bit0 power valid, bit1 cadence valid, bit2 cadence from power meter
+[flags:uint8]             // bit0 power valid, bit1 cadence valid, bit2 cadence from power meter,
+                          // bit3 power from the trainer (trainer firmware, no power meter connected)
 ```
 
 **Sent**: When the encoded value changes (power/cadence sample or validity change, checked at least once per second), and once per client after connect. Cadence source: the CSC sensor while it is connected, otherwise the power meter. A value older than 3 s (power: last packet; cadence: last crank event or CSC packet) is sent as 0 with its valid bit set. Details: `src/web/WEBSOCKET_PROTOCOL.md`.
@@ -830,6 +897,22 @@ const connected = frame[13];
 ```
 
 **Sent**: On change, at most once per 3 s (a mode, FTP or cool-down change at once), on client connect and on `telemetry/refresh`. Before fan control runs (fans and BLE still starting), only `mode`, `effective` = `mode`, `ftp_w` and `cooldown` are set. Details: `src/web/WEBSOCKET_PROTOCOL.md`.
+
+---
+
+#### TRAINER_STATUS (0x0F) (trainer firmware only)
+
+**Status**: Only with `HW_ENABLE_TRAINER_MIRROR=1`. Built from `BLERelayManager::trainerStatus()`
+
+**Payload** (4 + name_len bytes):
+```
+[state:uint8]             // TrainerState: 0 off, 1 waiting, 2 connecting, 3 discovering, 4 ready, 5 changed, 6 setup
+[flags:uint8]             // bit0 app connected, bit1 mirror (this boot), bit2 enabled (next boot), bit3 set up
+[setup:uint8]             // TrainerCheck 0..8, 0xFE running, 0xFD busy, 0xFC device rule, 0xFF idle
+[name_len:uint8][name:bytes]
+```
+
+**Sent**: On change, once per client after connect and on `telemetry/refresh`. Details: `src/web/WEBSOCKET_PROTOCOL.md`.
 
 ---
 

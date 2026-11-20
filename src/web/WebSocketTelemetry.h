@@ -48,6 +48,8 @@
  * - FIRMWARE_SEARCH_RESULT (0x0A): Firmware search result
  * - BIKE_METRICS (0x0D): Power and cadence (also sent once per client on connect)
  * - FAN_CONTROL (0x0E): Fan mode and acknowledged fan target (HW_ENABLE_FAN_POWER_MODE only)
+ * - TRAINER_STATUS (0x0F): Trainer mirror status (HW_ENABLE_TRAINER_MIRROR only)
+ * - APP_STATUS (0x10): Number of apps (BLE centrals) connected to Homewind (HW_ENABLE_BLE only)
  *
  * 0x0C is the WebUI control frame CLIENT_ID (not a telemetry frame).
  */
@@ -65,6 +67,8 @@ enum class TelemetryFrameType : uint8_t {
   HEART_RATE_SETTINGS = 0x0B,     // Snapshot/Delta: Heart rate min/max settings
   BIKE_METRICS = 0x0D,            // Delta: Power and cadence (hw::BikeMetrics)
   FAN_CONTROL = 0x0E,             // Delta: Fan mode and target (hw::FanControlStatus)
+  TRAINER_STATUS = 0x0F,          // Delta: Trainer mirror status (BLERelayManager::TrainerStatus)
+  APP_STATUS = 0x10,              // Delta: Connected apps (BikeSensor::centralCount()); last dirtyFlags bit
 };
 
 /**
@@ -262,6 +266,21 @@ private:
    * Build FAN_CONTROL frame (delta)
    */
   size_t buildFanControl(uint8_t* buffer, size_t bufferSize);
+
+#if HW_ENABLE_TRAINER_MIRROR
+  /**
+   * Build TRAINER_STATUS frame (delta)
+   */
+  size_t buildTrainerStatus(uint8_t* buffer, size_t bufferSize);
+#endif
+
+#if HW_ENABLE_BLE
+  /**
+   * Build APP_STATUS frame (delta)
+   */
+  size_t buildAppStatus(uint8_t* buffer, size_t bufferSize);
+  uint8_t lastAppCount;  // centralCount() at the last loopFlush(); loop task only
+#endif
   
   /**
    * Send full snapshot to newly connected client

@@ -28,6 +28,14 @@ void sendMaintenance503(AsyncWebServerRequest* request) {
   request->send(503, "application/json", json);
 }
 
+bool requireHomewindHeader(AsyncWebServerRequest* request) {
+  if (!request) return false;
+  if (request->method() != HTTP_POST) return true;
+  if (request->hasHeader("X-Homewind")) return true;
+  request->send(403, "text/plain", "Forbidden");
+  return false;
+}
+
 bool getStringParam(AsyncWebServerRequest* request, const char* name, String& out, bool required) {
   if (!request || !name) {
     return false;

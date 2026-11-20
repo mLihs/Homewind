@@ -36,43 +36,19 @@ static const WebAsset WEB_ASSETS[] PROGMEM = {
     .len = webui_index_html_len,
     .gzipped = true,
     .mime_type = "text/html",
-    .etag = "65f03825",
+    .etag = "\"9fac1951\"",
     .cacheSeconds = 0
-  },  {
-    .path = "app.css",
-    .data = webui_app_css_data,
-    .len = webui_app_css_len,
-    .gzipped = true,
-    .mime_type = "text/css",
-    .etag = "d1e68c0a",
-    .cacheSeconds = 86400
-  },  {
-    .path = "app.js",
-    .data = webui_app_js_data,
-    .len = webui_app_js_len,
-    .gzipped = true,
-    .mime_type = "application/javascript",
-    .etag = "9e3d6a1b",
-    .cacheSeconds = 86400
   }
 };
 
 /**
  * @brief Number of assets in manifest
  */
-static const size_t WEB_ASSETS_COUNT = 3;
+static const size_t WEB_ASSETS_COUNT = 1;
 
 /**
- * @brief WebUI build hash for cache-busting
- * 
- * This hash is derived from all asset data and changes when any asset changes.
- * Used in HTML as ?v= parameter for app.js and app.css to ensure browsers
- * fetch updated assets after WebUI changes.
- * 
- * Example usage in HTML:
- *   <link rel="stylesheet" href="app.css?v=15f95597">
- *   <script src="app.js?v=15f95597" defer></script>
+ * @brief WebUI build hash (also in index.html as data-webui-build)
  */
-#define HOMEWIND_WEBUI_BUILD_HASH "15f95597"
+#define HOMEWIND_WEBUI_BUILD_HASH "562b0280"
 
 #endif // HOMEWIND_WEB_ASSETS_MANIFEST_H

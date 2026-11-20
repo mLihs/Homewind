@@ -721,6 +721,11 @@ bool FanHRAdapter::blendLoop(uint32_t nowMs) {
     BikeSensor::SensorInfo info;
     in.powerConfigured = BikeSensor::info(BikeSensor::SensorType::POWER, info) &&
                          info.state != BikeSensor::SlotState::EMPTY;
+#if HW_ENABLE_TRAINER_MIRROR
+    BikeSensor::TrainerInfo trainer;
+    BikeSensor::trainerInfo(trainer);
+    in.powerConfigured = in.powerConfigured || trainer.mirror;
+#endif
   }
   in.powerFresh = _powerSampleValid;
   _blendOut = _blend.update(nowMs, in);

@@ -398,6 +398,41 @@ void App::handleSerialCommands() {
       Serial.printf("WiFi:       %s (%s)\n", s_wifiWML.ipString(), s_wifiWML.modeString());
   #endif
 #endif
+#if HW_ENABLE_TRAINER_MIRROR
+      {
+        BikeSensor::TrainerInfo t;
+        BikeSensor::trainerInfo(t);
+        Serial.printf("Trainer:    state=%u mirror=%u app=%u svc=%u chr=%u mtu=%u/%u\n",
+                      static_cast<unsigned>(t.state), t.mirror, t.appConnected, t.services,
+                      t.characteristics, t.mtu, t.appMtu);
+        Serial.printf("            up=%lu down=%lu dropped=%lu writeErrors=%lu oversize=%lu\n",
+                      static_cast<unsigned long>(t.up), static_cast<unsigned long>(t.down),
+                      static_cast<unsigned long>(t.dropped), static_cast<unsigned long>(t.writeErrors),
+                      static_cast<unsigned long>(t.oversize));
+      }
+#endif
+#if HW_ENABLE_BLE
+      {
+        static const BikeSensor::SensorType kTypes[] = {BikeSensor::SensorType::HEART_RATE,
+                                                       BikeSensor::SensorType::SPEED_CADENCE,
+                                                       BikeSensor::SensorType::POWER};
+        static const char* const kNames[] = {"HR ", "CSC", "PWR"};
+        for (uint8_t i = 0; i < 3; i++) {
+          BikeSensor::SensorInfo s;
+          if (!BikeSensor::info(kTypes[i], s)) continue;
+          Serial.printf("Slot %s:   state=%u %02x:%02x:%02x:%02x:%02x:%02x addr=%d fails=%u "
+                        "capWait=%u cap=%d nameFb=%u lastDisc=%d \"%s\"\n",
+                        kNames[i], static_cast<unsigned>(s.state), s.mac[0], s.mac[1], s.mac[2],
+                        s.mac[3], s.mac[4], s.mac[5], s.addrType, s.failCount, s.capWait,
+                        s.capReason, s.nameFallback, s.lastDisconnectReason, s.name);
+        }
+        const BikeSensor::Stats st = BikeSensor::stats();
+        Serial.printf("BLE:        connects=%lu fails=%lu disc=%lu scans=%lu hostResets=%lu\n",
+                      static_cast<unsigned long>(st.connects), static_cast<unsigned long>(st.connectFails),
+                      static_cast<unsigned long>(st.disconnects), static_cast<unsigned long>(st.scansStarted),
+                      static_cast<unsigned long>(st.hostResets));
+      }
+#endif
       Serial.println(F("=========================\n"));
       break;
       

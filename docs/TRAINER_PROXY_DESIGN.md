@@ -147,7 +147,7 @@ advertising (captured raw) and copies what fits.
 
 | Measurement | Toward app (default) | Internal (fan / WebUI / Touch) |
 | --- | --- | --- |
-| Power | trainer mirror unchanged (CPS + FE-C + FC82) | trainer → power meter |
+| Power | trainer mirror unchanged (CPS + FE-C + FC82) | power meter → trainer (D2, `AGENT_TRAINER_MIRROR.md` Task 4) |
 | Cadence | trainer CSC crank unless a higher cadence source is active (then compose) | CSC sensor → power meter → trainer |
 | Speed | trainer (fixed) | trainer |
 | Heart rate | HR strap (fixed) | HR strap |
@@ -199,6 +199,15 @@ advertising (captured raw) and copies what fits.
   table hash) next to `trn_gatt`; the v3 blob stays unchanged, so a downgrade keeps HR,
   CSC and power meter. M2a task.
 - Touch display: unchanged.
+- **Status M2a (2026-11-18, test build `--trainer`, hardware test open):** Trainer row
+  (search via a power discovery, "Reading trainer…", result per check, "Restart to
+  activate", **Release trainer** = `trainer/enable`, Forget), notices (firmware update,
+  mirror mode feeds the separate cadence sensor/power meter only to Homewind, removed
+  power slot), device-rule hint, status from frame `TRAINER_STATUS` (0x0F). Not done:
+  DIS manufacturer/model and control-service list, priority lists and `src_prio` (fixed
+  order of § 3), GATT-changed notice in the WebUI (state `changed` is in the frame).
+  Touch: same card, power and name from the trainer while no power meter is connected
+  (`hw::selectBikeCard`); no HomeWindWSAmoled change.
 
 ---
 
@@ -358,7 +367,7 @@ with a vendor name → not shippable; stop and re-decide.
 | --- | --- | --- |
 | M0 | Gate G0–G5 (incl. logged iPad + Apple TV) — **passed 2026-11-16** (G3/G4 via G5; G2 open, non-blocking; G1 before M2a) | gate table; `cps` decision; go/no-go |
 | M1 | BBS module: table codec + NVS + hash; **address from hash**; mirror build in `serverStart()`; relay FIFO, indication queue, **CCCD refcount**, link coupling, DFU skip, ENOMEM retry | host: table encode/decode, CRC, hash, UUID mapping, FIFO order (CCCD before write), indication pacing and overflow, length cap, refcount subscribe/unsubscribe, address derivation |
-| M2a | Homewind: Trainer row, setup with reboot, status, notices, **Release trainer**; read-along to fan Hybrid, `BIKE_METRICS`, Touch | NEO 2T: 60 min ERG + simulation ride, trainer power cycle, Zwift restart; heap G7; WLAN + real HR |
+| M2a | Homewind: Trainer row, setup with reboot, status, notices, **Release trainer**; read-along to fan Hybrid, `BIKE_METRICS`, Touch — **implemented 2026-11-18 as test build `--trainer` (default off); part 1 smoke test passed on Touch, hardware test of part 2 open** | NEO 2T: 60 min ERG + simulation ride, trainer power cycle, Zwift restart; heap G7; WLAN + real HR |
 | M2b | **DROPPED (G5 `cps` 2026-11-15: Zwift takes power from FC82).** Was: CPS encoder toward app, composition, counter offsets, WebUI "power toward Zwift" | host + NEO 2T + power meter; document FE-C/FC82 mismatch |
 | M2b′ | Cadence composition (CSC/PM crank into mirrored CSC) without CPS rewrite | host + hardware drop-out/return |
 | M3 | Hardening: GATT change detection, second-app attempt, link reservation, hub↔mirror address | hardware: table mismatch, second app, Touch heap 60 min |
@@ -388,6 +397,7 @@ not "any trainer".
    accepted; M2b dropped by G5 `cps`, so expect the lower end. **2026-11-17:** M1 came in
    at ~4,000 counted lines (2,591 before); budget set to 4,000, no guard macro; M2a is
    budgeted separately. After the bench fixes 4,004; budget raised to 4,050.
+   **2026-11-18 (maintainer):** M2a budget 4,100; 4,078 counted after the M2a read-along, 4,091 after the capacity release and the `SensorInfo` diagnostics.
 2. G7 thresholds (lowest ≥ 20 KB, block ≥ 16 KB) acceptable?
 
 ---

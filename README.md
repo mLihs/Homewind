@@ -204,7 +204,10 @@ Usage:
 ./tools/build.sh ports                    # list serial ports
 ./tools/build.sh --clean                  # delete the object cache first
 ./tools/build.sh --no-deploy              # do not copy firmware into the website tree
+./tools/build.sh touch --no-deploy --trainer  # optional build-id stamp only (-trainer); mirror is on in every 2.0 release build
 ```
+
+From 2.0.0 every release build includes the trainer mirror (`HW_ENABLE_TRAINER_MIRROR` + `BBS_COMPILE_TRAINER`; Touch uses PSRAM for the trainer runtime). Homewind relays a smart trainer to Zwift or Rouvy as a GATT mirror and shows a Trainer row in "Setup Sensors". Trainer firmware updates (DFU) are not mirrored — use Pause first. Besides the heart-rate strap, at most two devices (cadence sensor, power meter, trainer); without a connected power meter, the dashboard, the Touch display and Hybrid use the trainer's power. Design: `docs/TRAINER_PROXY_DESIGN.md`. Website copy: `Website/docs/WEBSITE_TRAINER_MIRROR.md`.
 
 What it does per variant:
 
@@ -297,7 +300,7 @@ Run `tools/build_webui.py` after changing anything in `webui_src/`. The script e
 
 | Project | What it is |
 | --- | --- |
-| [Xiaomi Cloud Token Extractor](https://github.com/mLihs/GUI-Miio-Tokenextrator-All-Plattforms) | Desktop GUI to read Xiaomi device tokens, needed once to add a fan |
+| [Xiaomi Cloud Token Extractor](https://github.com/mLihs/GUI-Miio-Tokenextrator-All-Plattforms) | Desktop GUI to read Xiaomi device tokens. Paste into the WebUI, or POST to `fan/add` (header `X-Homewind: 1`) — see [docs/05_APIS.md](docs/05_APIS.md#adding-a-fan-from-the-token-extractor-or-any-external-tool) |
 | [BluetoothBikeSensorServer](https://github.com/mLihs/BluetoothBikeSensorServer) | BLE sensor relay used by Homewind |
 | [SmartMiFanAsync](https://github.com/mLihs/SmartMiFanAsync) | Fan control library used by Homewind |
 | [Homewind on MakerWorld](https://makerworld.com/en/@hires2k/) | Housing and stand to print |

@@ -22,6 +22,8 @@
     CLIENT_ID: 0x0C, // Control: [0x0C][clientId:uint32 LE]
     BIKE_METRICS: 0x0D,
     FAN_CONTROL: 0x0E, // test firmware only (HW_ENABLE_FAN_POWER_MODE)
+    TRAINER_STATUS: 0x0F, // trainer firmware only (HW_ENABLE_TRAINER_MIRROR)
+    APP_STATUS: 0x10, // [apps:uint8] BLE centrals connected to Homewind
   };
 
   const SENSOR_TYPE_REV = { 0: "HR", 1: "CSC", 2: "PWR" };
@@ -32,10 +34,16 @@
     SCROLL_DEBOUNCE_MS: 80,           // Scroll event debounce delay
     RECONNECT_BASE_MS: 1000,          // Base delay for WebSocket reconnection
     RECONNECT_MAX_MS: 30000,          // Maximum delay for WebSocket reconnection
+    WS_SILENCE_MS: 45000,             // No frame for this long: reconnect (SYSTEM_STATUS comes every 30 s)
     REBOOT_POLL_INTERVAL_MS: 2000,    // Reboot monitoring poll interval
     REBOOT_INITIAL_DELAY_MS: 3000,    // Initial delay before first reboot check
     FIRMWARE_STATUS_POLL_MS: 2500,    // Firmware status polling interval
+    FIRMWARE_STATUS_POLL_SLOW_MS: 10000, // Same while FIRMWARE_PROGRESS frames arrive (one connection less per 2.5 s)
+    FIRMWARE_SEARCH_MAX_MS: 75000,    // No search result by then (firmware HTTP timeout 60 s): error
     DISCOVERY_TIMEOUT_MS: 2000,       // Discovery timeout fallback
+    SEARCH_SCAN_MS: 15000,            // Sensor search scan (BLERelayManager startDiscovery duration)
+    TRAINER_READ_MS: 15000,           // Typical trainer setup (scan, connect, read)
+    TRAINER_READ_MAX_MS: 45000,       // No setup result by then: shown as an error
   };
   const TIMING = window.TIMING; // Local reference for this scope
 
@@ -49,12 +57,17 @@
     firmwareProgress: 0,
     discovery: { active: false, type: null, results: [], generation: 0 },
     fanControl: null, // last FAN_CONTROL frame; null on firmware without it
+    trainer: null,    // last TRAINER_STATUS frame; null on firmware without it
+    appsConnected: null, // last APP_STATUS frame; null until it arrives (older firmware: never)
   };
 
   // ---- DOM helpers (tiny, no framework) ----
   function $(id) { return document.getElementById(id); }
 
   // ---- HTTP Actions (POST + text/plain) ----
+  // CSRF: custom header; same-origin WebUI only. External tools must send X-Homewind: 1
+  window.HW_POST_HEADERS = { "X-Homewind": "1" };
+
   async function httpPost(path, params = {}) {
     const url = new URL(path, location.origin);
     Object.entries(params).forEach(([k, v]) => {
@@ -62,7 +75,7 @@
     });
 
     try {
-      const resp = await fetch(url.toString(), { method: "POST" });
+      const resp = await fetch(url.toString(), { method: "POST", headers: window.HW_POST_HEADERS });
       const text = (await resp.text()).trim();
 
       // Normalize Homewind responses
@@ -101,16 +114,8 @@
   // ---- UI adapters (call existing modules; DO NOT rebuild UI) ----
   function applyHeartRate(bpm) {
     state.heartRate = bpm;
-
-    // existing UI element (index.html)
-    const el = $("hr-value");
-    if (el) el.textContent = String(bpm);
-
-    // keep your existing manager logic intact
-    if (window.HeartRateManager && typeof window.HeartRateManager.updateHeartRate === "function") {
-      window.HeartRateManager.updateHeartRate(bpm);
-    }
-    if (typeof window.onHeartRateChanged === "function") window.onHeartRateChanged(bpm);
+    // Writes #hr-value and calls window.onHeartRateChanged
+    window.HeartRateManager.updateHeartRate(bpm);
   }
 
   function applyFirmwareVersion(v, board) {
@@ -166,17 +171,47 @@
 
     // Update HR widget based on sensor state
     updateHrWidgetFromSensors(list);
-    // Power & cadence tile: only with a cadence or power sensor
-    const bikeCard = $("bike-card");
-    if (bikeCard) bikeCard.hidden = !list.some((x) => x.type === "CSC" || x.type === "PWR");
+    renderBikeCard();
     fanModeSensorsKnown = true;
     renderFanMode();
   }
 
-  // BIKE_METRICS flags: bit0 power valid, bit1 cadence valid, bit2 cadence from power meter
+  // D2: the trainer is a power source while mirrored, or set up for the next boot
+  function trainerIsPowerSource() {
+    const t = state.trainer;
+    return !!t && (t.mirror || (t.enabled && t.setUp));
+  }
+
+  // Power & cadence tile: only with a cadence or power sensor, or the trainer
+  function renderBikeCard() {
+    const bikeCard = $("bike-card");
+    if (!bikeCard) return;
+    const list = Array.from(state.sensors.values());
+    const hasPower = list.some((x) => x.type === "PWR") || trainerIsPowerSource();
+    bikeCard.hidden = !hasPower && !list.some((x) => x.type === "CSC");
+    // A cadence sensor alone: no power column
+    const powerMetric = $("bike-power-metric");
+    if (powerMetric) powerMetric.hidden = !hasPower;
+  }
+
+  // TRAINER_STATUS: [state][flags][setup][name_len][name]
+  const TRAINER_STATES = ["off", "waiting", "connecting", "discovering", "ready", "changed", "setup"];
+  function applyTrainerStatus(t) {
+    state.trainer = t;
+    renderBikeCard();
+    renderFanMode();
+    if (window.BLESensorManager && typeof window.BLESensorManager.updateTrainer === "function") {
+      window.BLESensorManager.updateTrainer();
+    }
+  }
+
+  // BIKE_METRICS flags: bit0 power valid, bit1 cadence valid, bit2 cadence from power meter,
+  // bit3 power from the trainer
   function applyBikeMetrics(watts, rpm, flags) {
     const p = $("bike-power"), c = $("bike-cadence"), hint = $("bike-cadence-hint");
     if (p) p.textContent = (flags & 1) ? String(watts) : "–";
+    const powerMetric = $("bike-power-metric");
+    if (powerMetric) powerMetric.classList.toggle("bike-metric-inactive", !(flags & 1));
     if (c) c.textContent = (flags & 2) ? String(rpm) : "–";
     if (hint) hint.hidden = !(flags & 4);
   }
@@ -195,11 +230,16 @@
   let fanModeErrorTimer = null;
   let fanModeSensorsKnown = false; // FAN_CONTROL arrives before SENSORS_SNAPSHOT on connect
 
+  function fanModeErrorText(code) {
+    if (code === "no_power_source" && state.trainer) return "Hybrid needs a power meter or the trainer.";
+    return FAN_MODE_ERRORS[code];
+  }
+
   // Same preconditions as fanmode/set: sensors configured (not connected), HR span
   function hybridBlocker() {
     const types = Array.from(state.sensors.values()).filter((s) => !s.duplicate).map((s) => s.type);
     if (!types.includes("HR")) return "no_hr_sensor";
-    if (!types.includes("PWR")) return "no_power_source";
+    if (!types.includes("PWR") && !trainerIsPowerSource()) return "no_power_source";
     const min = parseInt(($("hr-min-value") || {}).textContent, 10);
     const max = parseInt(($("hr-max-value") || {}).textContent, 10);
     if (!(max - min >= FAN_MODE_MIN_SPAN_BPM)) return "hr_span_too_small";
@@ -263,7 +303,7 @@
     if (!res.ok) {
       let code = "";
       try { code = JSON.parse(res.error).error || ""; } catch (_) {}
-      fanModeError = FAN_MODE_ERRORS[code] || ("Fan mode not changed: " + (code || res.error));
+      fanModeError = fanModeErrorText(code) || ("Fan mode not changed: " + (code || res.error));
       clearTimeout(fanModeErrorTimer);
       fanModeErrorTimer = setTimeout(() => { fanModeError = ""; renderFanMode(); }, 5000);
     }
@@ -311,7 +351,7 @@
       if (btn) {
         if (btn.getAttribute("aria-disabled") === "true") {
           if (typeof window.showErrorModal === "function") {
-            window.showErrorModal(FAN_MODE_ERRORS[hybridBlocker()] || "Hybrid is not available right now.", { title: "Hybrid not available" });
+            window.showErrorModal(fanModeErrorText(hybridBlocker()) || "Hybrid is not available right now.", { title: "Hybrid not available" });
           }
         } else if (state.fanControl && btn.dataset.mode !== FAN_MODES[state.fanControl.mode]) {
           setFanMode({ mode: btn.dataset.mode });
@@ -336,9 +376,7 @@
     if (!hrSensor) {
       // No HR sensor configured
       if (hrNameEl) hrNameEl.textContent = "No HR Sensor";
-      if (hrValueEl && hrValueEl.textContent === "--") {
-        // Keep placeholder if no value received yet
-      }
+      if (hrValueEl) hrValueEl.textContent = "--";
     } else if (!hrSensor.connected) {
       // HR sensor configured but not connected
       if (hrNameEl) hrNameEl.textContent = hrSensor.name + " (Offline)";
@@ -435,12 +473,14 @@
       case FRAME.CLIENT_ID: {
         if (u8.length < off + 4) return;
         wsClientId = u32(dv, off);
-        // Now that we know our WS client id, request a targeted refresh.
-        // Server will unicast heavy snapshots (SENSORS/FANS) to this client.
+        // The first client gets the snapshots from the staged connect (FANS_SNAPSHOT after ~300 ms);
+        // only a second client needs a targeted refresh (server unicasts SENSORS/FANS to this id)
         if (typeof window.requestTelemetryRefresh === "function") {
           setTimeout(() => {
+            // Rejected clients (MAX_CLIENTS) get CLIENT_ID too, then the close
+            if (fansSinceOpen || !ws || ws.readyState !== WebSocket.OPEN) return;
             try { window.requestTelemetryRefresh(true); } catch (_) {}
-          }, 50);
+          }, 1000);
         }
         return;
       }
@@ -476,6 +516,7 @@
         if (hrMinDisplay) hrMinDisplay.textContent = min;
         if (hrMaxDisplay) hrMaxDisplay.textContent = max;
         renderFanMode();
+        if (window.startFanAnimation) window.startFanAnimation();
         return;
       }
 
@@ -492,6 +533,30 @@
           cooldown: dv.getInt8(off + 9),
         };
         renderFanMode();
+        if (window.startFanAnimation) window.startFanAnimation();
+        return;
+      }
+
+      case FRAME.APP_STATUS: {
+        if (u8.length < off + 1) return;
+        state.appsConnected = u8[off];
+        return;
+      }
+
+      case FRAME.TRAINER_STATUS: {
+        // flags: bit0 app connected, bit1 mirror (this boot), bit2 enabled (next boot), bit3 set up
+        if (u8.length < off + 4) return;
+        const flags = u8[off + 1];
+        const nameR = readLPString(u8, off + 3); if (!nameR.ok) return;
+        applyTrainerStatus({
+          state: TRAINER_STATES[u8[off]] || "off",
+          appConnected: (flags & 1) !== 0,
+          mirror: (flags & 2) !== 0,
+          enabled: (flags & 4) !== 0,
+          setUp: (flags & 8) !== 0,
+          setup: u8[off + 2],
+          name: nameR.str,
+        });
         return;
       }
 
@@ -587,6 +652,7 @@
         // Fan: [token:32][connected:1][controlActive:1][recovery:1]
         // recovery: 0=normal, 1=recovering (auto), 2=exhausted (needs user action)
         if (u8.length < off + 1) return;
+        fansSinceOpen = true;
         const count = u8[off]; off += 1;
         const list = [];
         const FAN_ENTRY_SIZE = 35;
@@ -697,6 +763,8 @@
   let wsClientId = 0;
   let reconnectTimer = null;
   let reconnectAttempt = 0;
+  let lastFrameMs = 0;
+  let fansSinceOpen = false;   // staged connect delivered the snapshots: no refresh needed
 
   function ensureIndicator() {
     let el = document.getElementById("ws-connection-indicator");
@@ -750,21 +818,15 @@
 
       ws.onopen = () => {
         reconnectAttempt = 0;
+        lastFrameMs = Date.now();
         setIndicator(true);
         wsClientId = 0;
-        if (window.requestTelemetryRefresh) {
-          // Don't force a full refresh on every (re)connect:
-          // - During cold loads (no browser cache) the server is already busy serving assets.
-          // - Forcing heavy snapshot broadcasts can collapse the largest free block.
-          // Server-side, /telemetry/refresh is also guarded to only send heavy snapshots for <=1 client.
-          setTimeout(() => {
-            try { window.requestTelemetryRefresh(false); } catch (_) {}
-          }, 250);
-        }
+        fansSinceOpen = false;
       };
 
       ws.onmessage = (ev) => {
         if (!(ev.data instanceof ArrayBuffer)) return;
+        lastFrameMs = Date.now();
         const u8 = new Uint8Array(ev.data);
         handleFrame(u8);
       };
@@ -775,20 +837,13 @@
 
       ws.onclose = (event) => {
         setIndicator(false);
+        state.appsConnected = null;   // until the next APP_STATUS (falls back to the trainer's app flag)
         
         // Check if connection was rejected due to max clients limit
         // Close code 1008 = Policy Violation (sent by server when max clients reached)
         if (event.code === 1008 && event.reason === "MAX_CLIENTS_REACHED") {
-          const maxClients = 2; // Should match HW_WEBSOCKET_MAX_CLIENTS in Config.h
-          if (typeof window.showErrorModal === "function") {
-            window.showErrorModal({
-              message: `Maximale Anzahl von ${maxClients} Clients erreicht.`,
-              error: "Bitte trennen Sie eine andere Verbindung, bevor Sie diese Seite neu laden.",
-              code: "MAX_CLIENTS_REACHED"
-            });
-          } else {
-            alert(`Maximale Anzahl von ${maxClients} Clients erreicht. Bitte trennen Sie eine andere Verbindung.`);
-          }
+          window.showErrorModal("Too many devices have Homewind open. Close Homewind in another tab or on another device, then reload this page.",
+                                { title: "Too Many Connections" });
           // Don't reconnect if max clients reached - user needs to close another tab
           ws = null;
           return;
@@ -830,6 +885,15 @@
     discoveryStart: (type) => httpPost("/api/v1/action/discovery/start", { type }),
     discoveryStop: () => httpPost("/api/v1/action/discovery/stop", {}),
 
+    // Trainer mirror (trainer firmware only)
+    trainerSetup: (index) => httpPost("/api/v1/action/trainer/setup", {
+      generation: state.discovery.generation,
+      index: index,
+    }),
+    trainerSetupMac: (mac, name) => httpPost("/api/v1/action/trainer/setup", { mac, name }),
+    trainerEnable: (on) => httpPost("/api/v1/action/trainer/enable", { on: on ? "true" : "false" }),
+    trainerForget: () => httpPost("/api/v1/action/trainer/forget", {}),
+
     // Fan controls
     setFanControlState: (id8, controlState) => {
       const token = resolveFanTokenById(id8) || id8;
@@ -864,6 +928,8 @@
       discovery: { ...state.discovery },
     }),
     getFanControl: () => state.fanControl,
+    getTrainer: () => state.trainer,
+    getAppsConnected: () => state.appsConnected,
 
     // WS control
     wsConnect: connectWS,
@@ -901,15 +967,34 @@
     connectWS();
   }
 
-  // Reconnect when tab becomes visible again (only if disconnected)
+  // A stalled socket stays OPEN without frames; drop it without waiting for a close handshake
+  setInterval(() => {
+    if (!ws || ws.readyState !== WebSocket.OPEN || Date.now() - lastFrameMs < TIMING.WS_SILENCE_MS) return;
+    if (window.FirmwareUpdate && typeof window.FirmwareUpdate.getState === "function" && window.FirmwareUpdate.getState() === "downloading") return;
+    const stale = ws;
+    stale.onopen = stale.onmessage = stale.onerror = stale.onclose = null;
+    try { stale.close(); } catch (_) {}
+    ws = null;
+    setIndicator(false);
+    state.appsConnected = null;
+    scheduleReconnect();
+  }, 5000);
+
+  // Tab visible again (phone woke up) or network back: connect now, not after the pending backoff
+  const reconnectNow = () => {
+    if (ws && ws.readyState !== WebSocket.CLOSED) return;
+    // Same as onclose: no reconnect during download (heap-critical)
+    if (window.FirmwareUpdate && typeof window.FirmwareUpdate.getState === "function"
+        && window.FirmwareUpdate.getState() === "downloading") return;
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+    reconnectAttempt = 0;
+    connectWS();
+  };
   document.addEventListener("visibilitychange", () => {
-    if (!document.hidden) {
-      // Only attempt reconnect if truly disconnected (not just backgrounded)
-      if (!ws || ws.readyState === WebSocket.CLOSED) {
-        connectWS();
-      }
-    }
+    if (!document.hidden) reconnectNow();
   });
+  window.addEventListener("online", reconnectNow);
 })();
 
 // ===============================================================
@@ -1058,12 +1143,14 @@ Default Button Styling
 
 If no `className` is provided, the following default classes are used:
 
-  type "save"   → "hr-modal-btn hr-modal-btn-primary"
-  type "cancel" → "hr-modal-btn hr-modal-btn-secondary"
-  type "delete" → "hr-modal-btn hr-modal-btn-danger"
-  other types   → "hr-modal-btn"
+  type "save"      → "btn btn-regular btn-cta"
+  type "cancel"    → "btn btn-regular btn-tertiary"
+  type "delete"    → "btn btn-regular btn-danger"
+  type "primary"   → "btn btn-regular btn-primary"
+  type "secondary" → "btn btn-regular btn-secondary"
+  other types      → "btn btn-regular"
 
-You can override them in CSS or via `className`.
+`className` is appended to "btn btn-regular".
 
 ---------------------------------------------------------------
 Closing the Modal
@@ -1131,7 +1218,7 @@ Your ESP32/Arduino code (via WebSocket, HTTP, etc.) can:
             <h2 id="app-modal-title" class="app-modal-title"></h2>
             <div class="app-modal-subline"></div>
           </div>
-          <button type="button" class="app-modal-close" aria-label="Close">&times;</button>
+          <button type="button" class="app-modal-close" aria-label="Close"><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M1 1l8 8M9 1L1 9" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/></svg></button>
         </div>
         <div class="app-modal-body">
           <div class="app-modal-content"></div>
@@ -1466,6 +1553,7 @@ Your ESP32/Arduino code (via WebSocket, HTTP, etc.) can:
     if (!footerEl) return;
 
     footerEl.innerHTML = "";
+    footerEl.classList.remove("app-modal-footer-vertical"); // set per dialog after open (reset dialog)
 
     const userButtons = Array.isArray(opts.buttons) ? opts.buttons : null;
 
@@ -1554,6 +1642,9 @@ Your ESP32/Arduino code (via WebSocket, HTTP, etc.) can:
     backdrop.classList.add("is-open");
     backdrop.setAttribute("aria-hidden", "false");
     document.body.classList.add("app-modal-open");
+    // Page behind the dialog: no Tab/Enter into it (e.g. Reset during a firmware download)
+    const page = document.querySelector(".app");
+    if (page) page.inert = true;
 
     // Call onOpen callback if provided
     if (currentConfig.onOpen && typeof currentConfig.onOpen === "function") {
@@ -1576,6 +1667,8 @@ Your ESP32/Arduino code (via WebSocket, HTTP, etc.) can:
     backdrop.classList.remove("is-open");
     backdrop.setAttribute("aria-hidden", "true");
     document.body.classList.remove("app-modal-open");
+    const page = document.querySelector(".app");
+    if (page) page.inert = false;
     currentConfig = null;
     allowClose = true; // Reset close permission
   }
@@ -1587,6 +1680,15 @@ Your ESP32/Arduino code (via WebSocket, HTTP, etc.) can:
 
   window.AppModal = AppModal;
 })();
+
+// Click-only tiles (div role="button": HR range, FTP, fan art): Enter/Space act like a click
+document.addEventListener("keydown", (e) => {
+  const t = e.target;
+  if ((e.key === "Enter" || e.key === " ") && t.tagName !== "BUTTON" && t.getAttribute && t.getAttribute("role") === "button") {
+    e.preventDefault();
+    t.click();
+  }
+});
 
 // ===============================================================
 // HTML Escaping Utility - Centralized XSS protection
@@ -2118,7 +2220,7 @@ window.startRebootMonitoring = function (options) {
             
             // Call Arduino callback
             if (typeof window.onMinHeartRateChanged === "function") {
-              window.onMinHeartRateChanged(clamped);
+              window.onMinHeartRateChanged(clamped, currentMin);
             }
           } else {
             const minAllowed = currentMin + 10;
@@ -2127,9 +2229,10 @@ window.startRebootMonitoring = function (options) {
             
             // Call Arduino callback
             if (typeof window.onMaxHeartRateChanged === "function") {
-              window.onMaxHeartRateChanged(clamped);
+              window.onMaxHeartRateChanged(clamped, currentMax);
             }
           }
+          if (window.startFanAnimation) window.startFanAnimation();
 
           AppModal.close();
           return true;
@@ -2238,17 +2341,18 @@ window.startRebootMonitoring = function (options) {
    * Saves heart rate setting (min or max) to the server
    * @param {string} type - "min" or "max"
    * @param {number} value - Heart rate value to save
+   * @param {number} [previous] - Value shown before; restored if saving fails
    * @returns {Promise<void>}
    * @private
    */
-  function saveHeartRateSetting(type, value) {
+  function saveHeartRateSetting(type, value, previous) {
     const endpoint = `/api/v1/action/heartrate/set${type}`;
     const formData = new URLSearchParams();
     formData.append("value", value.toString());
     
     return fetch(endpoint, {
       method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      headers: { ...window.HW_POST_HEADERS, "Content-Type": "application/x-www-form-urlencoded" },
       body: formData
     })
       .then(response => {
@@ -2264,7 +2368,12 @@ window.startRebootMonitoring = function (options) {
         }
       })
       .catch(error => {
-        // Silent error handling
+        if (previous !== undefined) {
+          (type === "min" ? hrMinDisplay : hrMaxDisplay).textContent = previous;
+          if (window.startFanAnimation) window.startFanAnimation();
+        }
+        window.showErrorModal({ message: `The ${type === "min" ? "minimum" : "maximum"} heart rate was not saved.`, reason: error.message },
+                              { title: "Heart Rate Not Saved" });
       });
   }
 
@@ -2274,8 +2383,8 @@ window.startRebootMonitoring = function (options) {
    * @private
    */
   function setupHeartRateCallbacks() {
-    window.onMinHeartRateChanged = (value) => saveHeartRateSetting("min", value);
-    window.onMaxHeartRateChanged = (value) => saveHeartRateSetting("max", value);
+    window.onMinHeartRateChanged = (value, previous) => saveHeartRateSetting("min", value, previous);
+    window.onMaxHeartRateChanged = (value, previous) => saveHeartRateSetting("max", value, previous);
   }
 
   // Initialize event listeners when DOM is ready
@@ -2354,7 +2463,7 @@ window.startRebootMonitoring = function (options) {
 (function () {
   const MAX_FANS = 4;
   const TOKEN_LENGTH = 32;
-  const TOKEN_REGEX = /^[0-9a-zA-Z]{32}$/;
+  const TOKEN_REGEX = /^[0-9a-fA-F]{32}$/;
 
   // Global token list
   window.fanTokens = [];
@@ -2579,6 +2688,7 @@ window.startRebootMonitoring = function (options) {
           } else {
             return false;
           }
+          if (window.startFanAnimation) window.startFanAnimation();
           return true;
         }
       }
@@ -2645,25 +2755,49 @@ window.startRebootMonitoring = function (options) {
   function updateFanTokenInUI(oldToken, newToken) {
     const oldLower = (oldToken || "").toLowerCase();
     const newTrimmed = (newToken || "").trim();
+    const oldId8 = (oldToken || "").substring(0, 8);
+    const newId8 = newTrimmed.substring(0, 8);
 
-    // Update DOM card
+    // Update DOM card (token, fan-id, blade and gradient ids for the animation)
     const cards = fanGrid.querySelectorAll(".fan-card");
     cards.forEach((card) => {
       const stored = (card.getAttribute("data-token") || "").toLowerCase();
-      if (stored === oldLower) {
-        card.setAttribute("data-token", newTrimmed);
-        const tokenEl = card.querySelector(".fan-token");
-        if (tokenEl) {
-          tokenEl.textContent = "Token: " + shortenToken(newTrimmed);
-        }
-      }
+      if (stored !== oldLower) return;
+      card.setAttribute("data-token", newTrimmed);
+      card.setAttribute("data-fan-id", newId8);
+      const tokenEl = card.querySelector(".fan-token");
+      if (tokenEl) tokenEl.textContent = "Token: " + shortenToken(newTrimmed);
+      const blades = card.querySelector(`#FanBlades-${oldId8}`);
+      if (blades) blades.id = `FanBlades-${newId8}`;
+      const grad = card.querySelector(`#paint0_linear_477_2350_${oldId8}`);
+      if (grad) grad.id = `paint0_linear_477_2350_${newId8}`;
+      const stroke = card.querySelector(`path[stroke="url(#paint0_linear_477_2350_${oldId8})"]`);
+      if (stroke) stroke.setAttribute("stroke", `url(#paint0_linear_477_2350_${newId8})`);
     });
 
     // Update global list
     window.fanTokens = window.fanTokens.map((t) =>
       (t || "").toLowerCase() === oldLower ? newTrimmed : t
     );
+    if (typeof window.startFanAnimation === "function") window.startFanAnimation();
   }
+
+  // Fan art geometry: 7 identical blades and 2 x 44 radial spokes, generated instead of embedded
+  const [FAN_BLADES, FAN_SPOKES] = (() => {
+    const f = (n) => n.toFixed(3), T = Math.PI / 22;
+    const B = [9.809,-5.29,20.306,-7.118,31.325,-7.453,1.15,-.035,2.127,-.604,2.716,-1.629,.455,-.795,.489,-1.831,.114,-2.851,-1.718,-4.663,-4.262,-8.909,-7.466,-12.722,-1.099,-1.308,-2.73,-1.81,-4.36,-1.263,-4.16,1.398,-8.105,3.096,-12.038,5.08,-2.823,1.425,-5.376,3.01,-7.991,4.802,-2.915,1.998,-5.483,4.218,-7.961,6.722,-1.33,1.342,-2.562,2.623,-3.685,4.12,0,0,-.105,.1,-.105,.1,0,0,-.037,-.317,-.037,-.317];
+    let b = "M67.34 49.778", s = "";
+    for (let k = 0; k < 7; k++) {
+      const c = Math.cos(k * T * 44 / 7), n = -Math.sin(k * T * 44 / 7);
+      b += "c";
+      for (let i = 0; i < B.length; i += 2) b += f(B[i] * c - B[i + 1] * n) + " " + f(B[i] * n + B[i + 1] * c) + " ";
+    }
+    for (let i = 0; i < 44; i++) {
+      const p = (r, a) => f(56.726 + r * Math.cos(a)) + " " + f(57 + r * Math.sin(a));
+      s += "M56.726 57L" + p(50.35, i * T) + "M" + p(26.17, (i + .5) * T) + "L" + p(50.639, (i + .5) * T);
+    }
+    return [b + "z", s];
+  })();
 
   /**
    * Creates a new fan card element and adds it to the grid.
@@ -2696,8 +2830,8 @@ window.startRebootMonitoring = function (options) {
     const switchClass = hasError ? "switch error" : "switch";
     
     card.innerHTML = `
-      <div class="fan-art">
-        <svg xmlns="http://www.w3.org/2000/svg" width="114" height="114" fill="none" viewBox="0 0 114 114"><g id="FanBlades-${token.substring(0, 8)}"><path fill="#b5b5b5" d="M103.212 61.865c-3.686-2.379-7.473-4.406-11.477-6.243-2.873-1.319-5.705-2.327-8.737-3.254-3.378-1.032-6.716-1.657-10.22-2.032-1.878-.203-3.647-.367-5.518-.312-.055 0-.086-.027-.13-.04a.53.53 0 0 1 .21-.206c9.809-5.29 20.306-7.118 31.325-7.453 1.15-.035 2.127-.604 2.716-1.629.455-.795.489-1.831.114-2.851-1.718-4.663-4.262-8.909-7.466-12.722-1.099-1.308-2.73-1.81-4.36-1.263-4.16 1.398-8.105 3.096-12.038 5.08-2.823 1.425-5.376 3.01-7.991 4.802-2.915 1.998-5.483 4.218-7.961 6.722-1.33 1.342-2.562 2.623-3.685 4.12a.5.5 0 0 1-.105.1.52.52 0 0 1-.037-.317c1.981-10.965 7.096-20.315 13.704-29.139.69-.92.854-2.039.42-3.138-.337-.85-1.126-1.525-2.16-1.868C65.1 8.658 60.193 8 55.216 8.127c-1.708.044-3.12 1.006-3.707 2.621-1.5 4.124-2.633 8.266-3.533 12.58-.646 3.095-.998 6.08-1.227 9.242-.255 3.523-.12 6.915.292 10.415.22 1.876.454 3.637.923 5.45a.5.5 0 0 1 .014.144.52.52 0 0 1-.27-.169c-7.34-8.386-11.459-18.213-14.238-28.882-.29-1.113-1.062-1.939-2.193-2.285-.876-.266-1.894-.069-2.805.524-4.164 2.711-7.738 6.137-10.742 10.109-1.03 1.362-1.159 3.065-.262 4.531 2.29 3.743 4.822 7.213 7.632 10.605 2.017 2.435 4.13 4.571 6.46 6.722 2.596 2.396 5.333 4.407 8.325 6.266 1.605.997 3.127 1.913 4.837 2.676.05.023.066.062.1.092a.53.53 0 0 1-.28.094c-11.131.51-21.382-2.397-31.456-6.876-1.05-.467-2.178-.38-3.153.29-.755.518-1.237 1.438-1.341 2.521-.476 4.946-.025 9.876 1.207 14.7.422 1.657 1.674 2.817 3.38 3.03 4.354.545 8.645.728 13.05.646 3.162-.06 6.149-.38 9.284-.86 3.491-.535 6.769-1.422 10.088-2.602 1.78-.633 3.446-1.253 5.107-2.114a.5.5 0 0 1 .139-.046.5.5 0 0 1-.105.302c-6.54 9.02-15.206 15.224-24.988 20.307-1.021.53-1.656 1.467-1.74 2.646-.066.914.352 1.863 1.135 2.62 3.571 3.455 7.706 6.177 12.246 8.221 1.558.702 3.246.446 4.476-.753 3.14-3.065 5.96-6.306 8.64-9.8 1.927-2.508 3.537-5.044 5.118-7.795 1.758-3.063 3.11-6.178 4.257-9.51.615-1.787 1.168-3.475 1.531-5.31.01-.05.043-.07.062-.109a.5.5 0 0 1 .16.242c2.974 10.739 2.42 21.382.296 32.199-.222 1.128.114 2.209.982 3.009.673.621 1.677.887 2.755.746 4.928-.637 9.635-2.172 14.064-4.447 1.52-.78 2.373-2.26 2.202-3.97-.439-4.366-1.215-8.59-2.274-12.866-.761-3.07-1.739-5.911-2.905-8.86-1.298-3.285-2.892-6.282-4.782-9.257-1.013-1.594-1.987-3.08-3.196-4.51a.5.5 0 0 1-.075-.124.53.53 0 0 1 .319.034c10.25 4.37 18.226 11.439 25.358 19.843.744.877 1.798 1.288 2.967 1.108.904-.14 1.737-.759 2.3-1.69 2.574-4.25 4.308-8.887 5.293-13.77.338-1.674-.288-3.264-1.732-4.196v.003zm-46.283-4.819-.08-.085.017-.116.102-.06.11.044.035.112-.066.097-.116.01z"/></g><path stroke="#d8d8d8" stroke-miterlimit="10" d="M6.376 57.001h100.699M6.888 64.166l99.675-14.33M8.415 71.186l96.621-28.37M10.926 77.917l91.599-41.832M14.368 84.222 99.083 29.78M18.674 89.973l76.103-65.944M23.754 95.053l65.943-76.104M29.505 99.358l54.442-84.714M35.81 102.801l41.832-91.6M42.54 105.311l28.37-96.62M49.56 106.839 63.89 7.163M56.726 107.351V6.651M63.89 106.839 49.56 7.163M70.91 105.311 42.54 8.691M77.642 102.801l-41.833-91.6M83.947 99.358 29.505 14.644M89.697 95.053 23.754 18.949M94.777 89.973 18.674 24.029M99.083 84.222 14.368 29.78M102.525 77.917l-91.6-41.832M105.036 71.186l-96.62-28.37M106.563 64.166 6.888 49.836M82.849 55.133l24.386-1.743M6.216 60.612l24.426-1.745M82.318 51.435l23.889-5.196M7.244 67.763l23.93-5.205M81.265 47.851l22.908-8.542M9.278 74.693l22.946-8.556M79.714 44.452l21.459-11.714M12.278 81.264l21.495-11.733M77.694 41.31l19.574-14.65M16.183 87.342l19.606-14.673M75.248 38.485 92.538 21.2M20.912 92.802l17.32-17.314M72.425 36.038 87.08 16.469M26.37 97.533l14.68-19.601M69.283 34.017l11.722-21.455M32.446 101.44l11.742-21.49M65.884 32.465 74.435 9.56M39.016 104.442 47.58 81.5M62.3 31.41l5.204-23.888M45.947 106.48l5.212-23.929M58.603 30.878l1.752-24.386M53.096 107.51l1.755-24.427M54.867 30.877 53.132 6.49M60.32 107.512 58.58 83.084M51.168 31.407 45.981 7.515M67.47 106.487l-5.196-23.931M47.583 32.458 39.05 9.548M74.402 104.454l-8.548-22.948M44.185 34.008 32.477 12.546M80.974 101.456 69.247 79.958M41.04 36.027 26.4 16.447M87.052 97.555 72.386 77.942M38.216 38.472 20.937 21.175M92.514 92.827 75.206 75.502M35.768 41.294 16.203 26.632M97.248 87.37 77.65 72.683M33.746 44.435l-21.45-11.729M101.156 81.296 79.669 69.547M32.192 47.834 9.291 39.275M104.16 74.727l-22.94-8.573M31.137 51.418 7.251 46.205M106.2 67.797l-23.926-5.221M30.603 55.115 6.218 53.354M107.233 60.648l-24.425-1.764"/><path stroke="#d8d8d8" stroke-linecap="round" stroke-linejoin="round" d="M56.726 83.554c14.418 0 26.106-11.688 26.106-26.106S71.144 31.342 56.726 31.342 30.618 43.03 30.618 57.448s11.688 26.106 26.106 26.106"/><path fill="#fffdfd" d="M56.5 69C62.851 69 68 63.851 68 57.5S62.851 46 56.5 46 45 51.149 45 57.5 50.149 69 56.5 69"/><path stroke="url(#paint0_linear_477_2350_${token.substring(0, 8)})" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M57 113c30.928 0 56-25.072 56-56S87.928 1 57 1 1 26.072 1 57s25.072 56 56 56"/><path stroke="#e6e6e6" stroke-linecap="round" stroke-linejoin="round" d="M57 110.255c29.412 0 53.255-23.843 53.255-53.255S86.412 3.745 57 3.745 3.745 27.588 3.745 57 27.588 110.255 57 110.255"/><path stroke="#e0e0e0" stroke-linecap="round" stroke-linejoin="round" d="M57 107.367c27.896 0 50.51-22.614 50.51-50.51S84.896 6.347 57 6.347 6.49 28.961 6.49 56.857s22.614 50.51 50.51 50.51"/><defs><linearGradient id="paint0_linear_477_2350_${token.substring(0, 8)}" x1="57" y1="1" x2="57" y2="113" gradientUnits="userSpaceOnUse"><stop stop-color="#EFEFEF"/><stop offset="1" stop-color="#BABABA"/></linearGradient></defs></svg>
+      <div class="fan-art" role="button" tabindex="0" aria-label="Edit fan">
+        <svg xmlns="http://www.w3.org/2000/svg" width="114" height="114" fill="none" viewBox="0 0 114 114"><g id="FanBlades-${token.substring(0, 8)}"><path fill="#b5b5b5" d="${FAN_BLADES}"/></g><path stroke="#d8d8d8" stroke-miterlimit="10" d="${FAN_SPOKES}"/><path stroke="#d8d8d8" stroke-linecap="round" stroke-linejoin="round" d="M56.726 83.554c14.418 0 26.106-11.688 26.106-26.106S71.144 31.342 56.726 31.342 30.618 43.03 30.618 57.448s11.688 26.106 26.106 26.106"/><path fill="#fffdfd" d="M56.5 69C62.851 69 68 63.851 68 57.5S62.851 46 56.5 46 45 51.149 45 57.5 50.149 69 56.5 69"/><path stroke="url(#paint0_linear_477_2350_${token.substring(0, 8)})" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M57 113c30.928 0 56-25.072 56-56S87.928 1 57 1 1 26.072 1 57s25.072 56 56 56"/><path stroke="#e6e6e6" stroke-linecap="round" stroke-linejoin="round" d="M57 110.255c29.412 0 53.255-23.843 53.255-53.255S86.412 3.745 57 3.745 3.745 27.588 3.745 57 27.588 110.255 57 110.255"/><path stroke="#e0e0e0" stroke-linecap="round" stroke-linejoin="round" d="M57 107.367c27.896 0 50.51-22.614 50.51-50.51S84.896 6.347 57 6.347 6.49 28.961 6.49 56.857s22.614 50.51 50.51 50.51"/><defs><linearGradient id="paint0_linear_477_2350_${token.substring(0, 8)}" x1="57" y1="1" x2="57" y2="113" gradientUnits="userSpaceOnUse"><stop stop-color="#EFEFEF"/><stop offset="1" stop-color="#BABABA"/></linearGradient></defs></svg>
       </div>
       <div class="fan-meta">
         <label class="${switchClass}">
@@ -3266,26 +3400,20 @@ window.startRebootMonitoring = function (options) {
 
     // Call API to remove fan (sets speed to 0, turns off, deletes from NVS)
     const fanId = removedToken.substring(0, 8);
+    // The card stays until the device confirms: else it reappears with the next FANS_SNAPSHOT
+    const showRemoveError = (msg) => window.showErrorModal({ message: "The fan could not be removed.", reason: msg ? String(msg) : undefined }, { title: "Fan Not Removed" });
     window.ApiV1.removeFan(fanId)
       .then(apiResult => {
-        const wasRemoved = doRemove();
-        
-        if (apiResult.ok) {
-          // API call succeeded
-          if (wasRemoved) {
-            // Call Arduino callback only if we actually removed it
-            if (typeof window.onFanRemoved === "function") {
-              window.onFanRemoved(removedToken);
-            }
-          }
-        } else {
-          // Card was still removed from UI for user feedback
+        if (!apiResult.ok) {
+          showRemoveError(apiResult.error && (apiResult.error.message || apiResult.error));
+          return;
+        }
+        // Call Arduino callback only if we actually removed it
+        if (doRemove() && typeof window.onFanRemoved === "function") {
+          window.onFanRemoved(removedToken);
         }
       })
-      .catch(err => {
-        // Still try to remove from UI for user feedback
-        doRemove();
-      });
+      .catch(err => showRemoveError(err && err.message));
 
     return true; // Return true immediately (async removal)
   }
@@ -3362,6 +3490,15 @@ window.startRebootMonitoring = function (options) {
   function restoreFans(fansArray, suppressCallbacks = false) {
     if (!Array.isArray(fansArray)) {
       return { success: false, restored: 0, errors: ["Invalid input: expected array"] };
+    }
+
+    // Same token list: update states only; a rebuild drops the toggle's in-flight lock and cool-down
+    const norm = (t) => String(t || "").trim().toLowerCase();
+    if (fansArray.length === window.fanTokens.length &&
+        fansArray.every((f, i) => f && norm(f.token) === norm(window.fanTokens[i]))) {
+      fansArray.forEach((f) => setFanStatus(f.token, f.participationState || "INACTIVE"));
+      updateAddFanButtonState();
+      return { success: true, restored: fansArray.length };
     }
 
     // Clear existing fans silently (without callbacks)
@@ -3490,8 +3627,8 @@ window.startRebootMonitoring = function (options) {
             }, cooldownMs);
             
             if (!result.ok) {
-              // Revert toggle on error
-              evt.target.checked = !evt.target.checked;
+              // Revert toggle on error (absolute: a FANS_SNAPSHOT may have reset it meanwhile)
+              evt.target.checked = controlState !== "ACTIVE";
               
               // Check for 503 Service Unavailable (fan manager integration not available)
               const errorCode = result.error?.code;
@@ -3516,7 +3653,7 @@ window.startRebootMonitoring = function (options) {
           .catch(err => {
             delete evt.target.dataset.inFlight;
             evt.target.disabled = false;
-            evt.target.checked = !evt.target.checked;
+            evt.target.checked = controlState !== "ACTIVE";
             if (typeof window.showErrorModal === "function") {
               window.showErrorModal({
                 message: `Failed to connect to the server: ${err.message || 'Unknown error'}`
@@ -3648,6 +3785,7 @@ window.startRebootMonitoring = function (options) {
 
       // Update each fan animation
       let hasActiveFans = false;
+      let hasTarget = false;
       const fanCards = fanGrid.querySelectorAll(".fan-card");
       
       fanCards.forEach((card) => {
@@ -3665,6 +3803,7 @@ window.startRebootMonitoring = function (options) {
         }
 
         anim.targetSpeed = targetSpeed;
+        if (targetSpeed > 0) hasTarget = true;
 
         // Interpolate speed
         if (anim.speed < anim.targetSpeed) {
@@ -3688,14 +3827,13 @@ window.startRebootMonitoring = function (options) {
         }
       });
 
-      // Continue animation loop if there are fans (so we can react to HR/toggle changes)
-      // Only stop if there are no fans at all
-      const hasFans = fanCards.length > 0;
-      if (hasFans) {
+      // Stop when no fan spins or has a target; startAnimation() restarts on HR, HR range,
+      // FAN_CONTROL, toggle, fan state and new cards
+      if (hasActiveFans || hasTarget) {
         animationFrameId = requestAnimationFrame(animate);
       } else {
         animationFrameId = null;
-        fanAnimations.clear();
+        if (!fanCards.length) fanAnimations.clear();
       }
     }
 
@@ -3708,6 +3846,7 @@ window.startRebootMonitoring = function (options) {
         animationFrameId = requestAnimationFrame(animate);
       }
     }
+    window.startFanAnimation = startAnimation;
 
     // Start animation on first fan card creation
     const originalCreateFanCard = createFanCard;
@@ -3774,10 +3913,6 @@ window.startRebootMonitoring = function (options) {
   } else {
     initializeFanManager();
   }
-  
-  if (window.requestTelemetryRefresh) {
-    window.requestTelemetryRefresh();
-  }
 })();
 
 /**
@@ -3826,6 +3961,8 @@ window.startRebootMonitoring = function (options) {
     let currentState = STATE.IDLE;
     let lastSearchResult = null;
     let pollTimerId = null; // FIX: Track polling timer for cancellation
+    let searchTimerId = null;
+    let lastProgressFrameMs = 0;
     let statusPollTimerId = null; // HTTP status polling during DOWNLOADING (P1)
 
     /**
@@ -3923,45 +4060,53 @@ window.startRebootMonitoring = function (options) {
       }
 
       // Open modal first (UI feedback)
+      // onCancel: Cancel button, X, Esc and backdrop all abort
       AppModal.open({
         title: "Searching Update",
         icon: "--icon-spinner-svg-data",
         subline: "Please wait while the device checks for updates…",
         buttons: [
-          {
-            type: "cancel",
-            label: "Cancel",
-            className: "btn btn-regular btn-tertiary",
-            closeOnClick: true,
-            onClick: () => {
-              // FIX: Cancel polling timer if active
-              if (pollTimerId) {
-                clearTimeout(pollTimerId);
-                pollTimerId = null;
-              }
-              setState(STATE.ABORTED);
-              if (window.ApiV1 && typeof window.ApiV1.firmwareAbort === "function") {
-                window.ApiV1.firmwareAbort().catch(() => {});
-              }
-            },
-          },
-        ]
+          { type: "cancel", label: "Cancel", className: "btn btn-regular btn-tertiary", closeOnClick: true },
+        ],
+        onCancel: () => {
+          // FIX: Cancel polling timer if active
+          if (pollTimerId) {
+            clearTimeout(pollTimerId);
+            pollTimerId = null;
+          }
+          abortFirmware();
+        },
       });
 
       // Only transition state after HTTP call succeeds
       if (window.ApiV1 && typeof window.ApiV1.firmwareSearch === "function") {
         setState(STATE.SEARCHING);
+        // A lost FIRMWARE_SEARCH_RESULT (WS reconnect) would leave the search open forever
+        clearTimeout(searchTimerId);
+        searchTimerId = setTimeout(async () => {
+          if (currentState !== STATE.SEARCHING) return;
+          let msg = "No answer from the update search. Try again.";
+          try {
+            const resp = await fetch(FW_API.status, { method: "GET", cache: "no-cache" });
+            const text = (await resp.text()).trim();
+            const err = (text.match(/(?:^|\n)error=([^\n]*)/) || [])[1];
+            const st = (text.match(/(?:^|\n)state=([^\n]*)/) || [])[1];
+            if (st === "error" && err) msg = err;
+          } catch (_) {}
+          if (currentState !== STATE.SEARCHING) return;
+          setState(STATE.ERROR);
+          openError(msg);
+        }, window.TIMING.FIRMWARE_SEARCH_MAX_MS);
         window.ApiV1.firmwareSearch().then((result) => {
+          if (currentState !== STATE.SEARCHING) return; // aborted meanwhile
           if (!result || !result.ok) {
-            // HTTP call failed - show error and reset
             setState(STATE.ERROR);
             openError(result?.error || "Failed to start firmware search");
             return;
           }
-          
-          // Search is async on backend - WebSocket will deliver FIRMWARE_SEARCH_RESULT frame
-          // No polling needed - handleSearchResult() will be called via WS
+          // Search is async - FIRMWARE_SEARCH_RESULT arrives via WebSocket
         }).catch((err) => {
+          if (currentState !== STATE.SEARCHING) return;
           setState(STATE.ERROR);
           openError("Network error during search");
         });
@@ -3999,18 +4144,7 @@ window.startRebootMonitoring = function (options) {
         icon: "--icon-firmware-available-svg-data",
         content: notesHtml,
         buttons: [
-          {
-            type: "cancel",
-            label: "Cancel",
-            className: "btn btn-regular btn-tertiary",
-            closeOnClick: true,
-            onClick: () => {
-              setState(STATE.ABORTED);
-              if (window.ApiV1 && typeof window.ApiV1.firmwareAbort === "function") {
-                window.ApiV1.firmwareAbort().catch(() => {});
-              }
-            },
-          },
+          { type: "cancel", label: "Cancel", className: "btn btn-regular btn-tertiary", closeOnClick: true },
           {
             type: "save",
             label: "Start Update",
@@ -4021,7 +4155,16 @@ window.startRebootMonitoring = function (options) {
             },
           },
         ],
+        onCancel: abortFirmware,
       });
+    }
+
+    function abortFirmware() {
+      clearTimeout(searchTimerId);
+      setState(STATE.ABORTED);
+      if (window.ApiV1 && typeof window.ApiV1.firmwareAbort === "function") {
+        window.ApiV1.firmwareAbort().catch(() => {});
+      }
     }
 
     /**
@@ -4166,14 +4309,14 @@ window.startRebootMonitoring = function (options) {
      * @returns {void}
      */
     function handleSearchResult(result) {
+      clearTimeout(searchTimerId);
       // Ignore callbacks if aborted
       if (currentState === STATE.ABORTED) {
         return;
       }
 
-      // Accept results when in SEARCHING or READY_TO_UPDATE state
-      // (READY_TO_UPDATE means search completed and found an update)
-      if (currentState !== STATE.SEARCHING && currentState !== STATE.READY_TO_UPDATE) {
+      // Only while searching (a second client's result must not leave READY_TO_UPDATE stuck)
+      if (currentState !== STATE.SEARCHING) {
         return;
       }
 
@@ -4310,7 +4453,9 @@ window.startRebootMonitoring = function (options) {
               showInstallingThenRestarting();
               return;
             }
-            statusPollTimerId = setTimeout(check, pollInterval);
+            // Errors arrive only through this poll; with live progress frames it can be slow
+            const live = Date.now() - lastProgressFrameMs < 5000;
+            statusPollTimerId = setTimeout(check, live ? window.TIMING.FIRMWARE_STATUS_POLL_SLOW_MS : pollInterval);
           })
           .catch(() => {
             if (currentState !== STATE.DOWNLOADING) return;
@@ -4348,6 +4493,7 @@ window.startRebootMonitoring = function (options) {
       if (currentState !== STATE.DOWNLOADING) {
         return;
       }
+      lastProgressFrameMs = Date.now();
 
       let p = Number(percent);
       if (!Number.isFinite(p)) p = 0;
@@ -4644,7 +4790,7 @@ window.startRebootMonitoring = function (options) {
         buttons: [],
         actions: false,
       });
-      fetch("/api/v1/action/system/restart", { method: "POST" })
+      fetch("/api/v1/action/system/restart", { method: "POST", headers: window.HW_POST_HEADERS })
         .catch(() => {})
         .finally(() => startRebootMonitoringForRestart());
     }
@@ -4827,6 +4973,24 @@ const BLESensorManager = (function () {
 
   let currentState = STATE.SENSOR_OVERVIEW, currentDiscoveryType = null, discoveredSensors = [], selectedSensor = null, configuredSensors = [];
   let isSensorOverviewModalOpen = false; // Track if sensor overview modal is open
+  // Trainer firmware only: a discovery picks the trainer; a running setup watches for a removed sensor slot
+  let discoveryForTrainer = false, trainerSetupWatch = null, trainerSlotNotice = "";
+  // A stored release/forget waits for the TRAINER_STATUS that shows it before restarting
+  let trainerRestartWhen = null;
+  // The open overview re-renders only when its content changed (SENSORS_SNAPSHOT also comes as a periodic refresh)
+  let lastOverviewHtml = "";
+  
+  // Relay advertising pauses only while a search runs, so the scan does not share the radio
+  // with it (as the old library did during discovery). Idempotent.
+  let searchWatchdog = null;
+  function setSearchPause(on) {
+    if (!on) {
+      clearTimeout(searchWatchdog);
+      searchWatchdog = null;
+    }
+    const call = on ? window.ApiV1?.pauseBLERelayServer : window.ApiV1?.resumeBLERelayServer;
+    return typeof call === "function" ? call().catch(() => {}) : Promise.resolve();
+  }
   
   // Batch update support to prevent UI flicker from rapid WS updates
   let _batchUpdateActive = false;
@@ -4854,6 +5018,141 @@ const BLESensorManager = (function () {
   const getSensorTypeLabel = (type) => ({ HR: "Heart Rate", CSC: "Cadence", PWR: "Power" }[type] || type);
   const SENSOR_ICON_VARS = { HR: "--icon-sensor-hr-svg-data", CSC: "--icon-sensor-csc-svg-data", PWR: "--icon-sensor-pwr-svg-data" };
   const getSensorIconClass = (type, connected) => `sensor-icon-${type.toLowerCase()}${connected ? "" : "-grayscale"}`;
+  // TRAINER_STATUS setup byte: TrainerCheck, or 0xFE running, 0xFD busy, 0xFC device rule (0xFF idle)
+  const TRAINER_DEVICE_RULE = "Besides the heart-rate strap, at most two devices. A power meter also provides cadence.";
+  const SLOTS_FULL = "All slots in use";
+  const TRAINER_RESULTS = {
+    0: "Trainer read. Restart Homewind to activate it.",
+    1: "Trainer not found. Wake it up, keep it close and try again.",
+    2: "Could not connect to the trainer. Close apps using it and try again.",
+    3: "This trainer has too many Bluetooth services to mirror.",
+    4: "The trainer reported no Bluetooth services.",
+    5: "The trainer reported an empty service.",
+    6: "The trainer's data cannot be subscribed to.",
+    7: "The trainer did not report all services it advertises.",
+    8: "The trainer could not be saved. Try again.",
+    0xFD: "A search or trainer setup is running. Try again shortly.",
+    0xFC: TRAINER_DEVICE_RULE,
+  };
+
+  // Setup, release and forget take effect after a restart
+  const trainerRestartNeeded = (t) => t.setup === 0 || (t.setUp ? t.enabled !== t.mirror : t.mirror);
+
+  function renderTrainerTile(t, ruleFull) {
+    const running = t.setup === 0xFE;
+    const restartNeeded = trainerRestartNeeded(t);
+    const result = running ? "Reading trainer…"
+      : (TRAINER_RESULTS[t.setup] || (restartNeeded ? "Restart Homewind to apply the change." : ""));
+    const buttons = [];
+    if (restartNeeded && !running) buttons.push(`<button class="btn btn-small btn-cta trainer-restart-btn" type="button">Restart</button>`);
+    let name, status, statusClass = "";
+    if (t.setUp) {
+      name = window.escapeHtml(t.name || "Trainer");
+      const ready = t.mirror && t.state === "ready";
+      statusClass = ready ? "sensor-status-connected" : "sensor-status-disconnected";
+      // Connected or not shows in the icon colour
+      status = !t.mirror ? `<span class="sensor-battery">${t.enabled ? "Mirror after restart" : "Paused"}</span>`
+        : `<span class="sensor-badge">Mirroring</span>${ready && t.appConnected ? `<span class="sensor-badge">App connected</span>` : ""}`;
+      if (!running) {
+        buttons.push(`<button class="btn btn-small btn-tertiary trainer-enable-btn" type="button" data-on="${t.enabled ? "0" : "1"}">${t.enabled ? "Pause" : "Resume"}</button>`);
+        buttons.push(`<button class="btn btn-small btn-tertiary trainer-forget-btn" type="button">Remove</button>`);
+      }
+    } else {
+      name = "No Trainer Set Up";
+      status = ruleFull ? `<span class="sensor-battery">${SLOTS_FULL}</span>` : "";
+      if (!running) {
+        buttons.push(ruleFull
+          ? `<button class="btn btn-small btn-inactive trainer-add-btn" type="button" disabled>Add</button>`
+          : `<button class="btn btn-small btn-cta trainer-add-btn" type="button">Add</button>`);
+      }
+    }
+    if (result) status += `<span class="sensor-battery">${window.escapeHtml(result)}</span>`;
+    if (!t.setUp && ruleFull) statusClass = "sensor-tile-disabled";
+    const icon = getSensorIconClass("TRAINER", t.mirror && t.state === "ready");
+    return `<div class="sensor-tile ${statusClass}" data-type="TRAINER"><div class="sensor-info"><div class="sensor-icon ${icon}"></div><div class="sensor-text"><div class="sensor-name">${name}</div>${status ? `<div class="sensor-status">${status}</div>` : ""}</div></div><div class="sensor-actions">${buttons.join("")}</div></div>`;
+  }
+
+  function renderTrainerNotices(t, ruleFull) {
+    const notes = [];
+    if (ruleFull) notes.push(TRAINER_DEVICE_RULE);
+    if (trainerSlotNotice) notes.push(trainerSlotNotice);
+    if (t.setUp) {
+      notes.push("Update the trainer's firmware with Homewind switched off.");
+      if (configuredSensors.some(s => s.Type === "CSC" || s.Type === "PWR")) {
+        notes.push("In mirror mode the separate cadence sensor or power meter feeds only Homewind, not the app.");
+      }
+    }
+    return notes.map(n => `<p class="modal-text-muted-spaced">${window.escapeHtml(n)}</p>`).join("");
+  }
+
+  function attachTrainerHandlers(root) {
+    root.querySelectorAll(".trainer-add-btn").forEach(btn => btn.addEventListener("click", () => startDiscovery("PWR", true)));
+    root.querySelectorAll(".trainer-restart-btn").forEach(btn => btn.addEventListener("click", () => {
+      if (window.SystemManager && typeof window.SystemManager.restart === "function") {
+        isSensorOverviewModalOpen = false;   // no re-render over the restart dialog
+        window.SystemManager.restart();
+      }
+    }));
+    const showTrainerError = (message, reason) => {
+      if (typeof window.showErrorModal !== "function") return;
+      isSensorOverviewModalOpen = false;   // no re-render over the error; Close reopens the overview
+      window.showErrorModal({ message, reason },
+                            { title: "Trainer", buttonLabel: "Close", onClose: () => openSensorOverview() });
+    };
+    // stored(t): TRAINER_STATUS shows the change, then updateTrainer() restarts
+    const run = async (action, failMessage, stored) => {
+      trainerRestartWhen = stored;   // before the request: its status may come before the response
+      let error = null;
+      try {
+        const result = await action();
+        if (!result.ok) error = String(result.error || "Unknown error");
+      } catch (e) {
+        error = (e && e.message) ? e.message : "Network error";
+      }
+      if (error !== null) {
+        trainerRestartWhen = null;
+        showTrainerError(failMessage, error);
+        return;
+      }
+      setTimeout(() => {
+        if (trainerRestartWhen !== stored) return;   // shown (restarted or kept), or replaced
+        trainerRestartWhen = null;
+        showTrainerError("The trainer change was not saved.", "No confirmation from Homewind within 10 s.");
+      }, 10000);
+    };
+    root.querySelectorAll(".trainer-enable-btn").forEach(btn => btn.addEventListener("click", () => {
+      const on = btn.getAttribute("data-on") === "1";
+      run(() => window.ApiV1.trainerEnable(on), "The trainer setting could not be changed.", t => t.enabled === on);
+    }));
+    root.querySelectorAll(".trainer-forget-btn").forEach(btn => btn.addEventListener("click", () => {
+      isSensorOverviewModalOpen = false;   // a status update must not re-render the overview into it
+      AppModal.open({
+        title: "Remove Trainer",
+        icon: "--icon-error-svg-data",
+        content: `<div class="error-modal"><p class="modal-text-muted">The trainer's setup is deleted. To mirror it again, set it up again.</p></div>`,
+        buttons: [
+          { type: "cancel", label: "Cancel", className: "btn btn-regular btn-tertiary", closeOnClick: false, onClick: () => openSensorOverview() },
+          { type: "delete", label: "Remove", className: "btn btn-regular btn-danger", closeOnClick: false, onClick: () => {
+            trainerSlotNotice = "";
+            openSensorOverview();
+            run(() => window.ApiV1.trainerForget(), "The trainer could not be removed.", t => !t.setUp);
+          } }
+        ],
+        actions: false,
+      });
+    }));
+  }
+
+  // Trainer search: configured sensors are not offered (discovery has no MAC: their name, or
+  // the MAC an unnamed one shows), except the power slot (D8: a connected trainer does not
+  // advertise; the setup removes it from the slot, so it does not count for the device rule)
+  function trainerChoices(found) {
+    const power = configuredSensors.find(s => s.Type === "PWR");
+    const ruleFull = power && configuredSensors.some(s => s.Type === "CSC");
+    const taken = new Set(configuredSensors.flatMap(s => [s.Name, s.MAC.toLowerCase()]));
+    const rest = ruleFull ? [] : found.filter(s => !taken.has(s.Name));
+    return power ? [{ index: -1, Name: power.Name, MAC: power.MAC }, ...rest] : rest;
+  }
 
   function loadSensorsWithStates() {
     // Use WebSocket state directly - sensors are loaded via SENSORS_SNAPSHOT frame
@@ -4896,6 +5195,10 @@ const BLESensorManager = (function () {
       
       return loadSensorsWithStates().then(function(sensors) {
         configuredSensors = sensors;
+        const trainer = window.ApiV1 && typeof window.ApiV1.getTrainer === "function" ? window.ApiV1.getTrainer() : null;
+        // Trainer firmware: besides the HR strap, at most two of cadence sensor, power meter and trainer
+        const ruleFull = !!trainer &&
+          configuredSensors.filter(s => s.Type === "CSC" || s.Type === "PWR").length + (trainer.setUp ? 1 : 0) >= 2;
         const sensorListHtml = typesArray.map(type => {
           const sensor = configuredSensors.find(s => s.Type === type);
           const iconClass = getSensorIconClass(type, sensor?.Connected || false);
@@ -4905,11 +5208,21 @@ const BLESensorManager = (function () {
             const battery = sensor.Battery !== undefined && sensor.Battery !== null ? `${sensor.Battery}%` : "N/A";
             const statusClass = isConnected ? "sensor-status-connected" : "sensor-status-disconnected";
             // Duplicate: the other sensor type already uses this MAC; not added to the library
-            const statusText = sensor.Duplicate ? "Duplicate (used by other sensor)" : (isConnected ? "Connected" : "Disconnected");
-            return `<div class="sensor-tile ${statusClass}" data-type="${window.escapeHtml(type)}" data-name="${window.escapeHtml(sensor.Name)}"><div class="sensor-info"><div class="sensor-icon ${iconClass}"></div><div class="sensor-text"><div class="sensor-name">${name}</div><div class="sensor-status"><span class="sensor-battery">Battery: ${battery}</span><span class="sensor-conn-indicator">${statusText}</span></div></div></div><button class="btn btn-small btn-tertiary sensor-remove-btn" type="button">Remove</button></div>`;
+            // Connected or not shows in the icon colour
+            const duplicate = sensor.Duplicate ? `<span class="sensor-conn-indicator">Duplicate (used by other sensor)</span>` : "";
+            return `<div class="sensor-tile ${statusClass}" data-type="${window.escapeHtml(type)}" data-name="${window.escapeHtml(sensor.Name)}"><div class="sensor-info"><div class="sensor-icon ${iconClass}"></div><div class="sensor-text"><div class="sensor-name">${name}</div><div class="sensor-status"><span class="sensor-battery">Battery: ${battery}</span>${duplicate}</div></div></div><button class="btn btn-small btn-tertiary sensor-remove-btn" type="button">Remove</button></div>`;
           }
-          return `<div class="sensor-tile" data-type="${window.escapeHtml(type)}"><div class="sensor-info"><div class="sensor-icon ${iconClass}"></div><div class="sensor-text"><div class="sensor-name">No ${getSensorTypeLabel(type)} Sensor Connected</div></div></div><button class="btn btn-small btn-cta sensor-add-btn" type="button">Add</button></div>`;
+          const blocked = ruleFull && type !== "HR";
+          const addButton = blocked
+            ? `<button class="btn btn-small btn-inactive sensor-add-btn" type="button" disabled>Add</button>`
+            : `<button class="btn btn-small btn-cta sensor-add-btn" type="button">Add</button>`;
+          return `<div class="sensor-tile${blocked ? " sensor-tile-disabled" : ""}" data-type="${window.escapeHtml(type)}"><div class="sensor-info"><div class="sensor-icon ${iconClass}"></div><div class="sensor-text"><div class="sensor-name">No ${getSensorTypeLabel(type)} Sensor Added</div>${blocked ? `<div class="sensor-status"><span class="sensor-battery">${SLOTS_FULL}</span></div>` : ""}</div></div>${addButton}</div>`;
         }).join("");
+        if (trainer) {
+          // The power slot can become the trainer (trainerChoices), so it does not block Add
+          const trainerAddFull = ruleFull && !configuredSensors.some(s => s.Type === "PWR");
+          return `<div class="sensor-overview"><div class="sensor-list">${sensorListHtml}${renderTrainerTile(trainer, trainerAddFull)}</div>${renderTrainerNotices(trainer, ruleFull)}</div>`;
+        }
         return `<div class="sensor-overview"><div class="sensor-list">${sensorListHtml}</div></div>`;
       });
     });
@@ -4920,29 +5233,24 @@ const BLESensorManager = (function () {
     selectedSensor = null;
     discoveredSensors = [];
     currentDiscoveryType = null;
+    discoveryForTrainer = false;
     isSensorOverviewModalOpen = true; // Mark modal as open
     
-    // Pause BLE Relay Server when opening sensor overview
-    if (window.ApiV1 && typeof window.ApiV1.pauseBLERelayServer === "function") {
-      window.ApiV1.pauseBLERelayServer().catch(function(err) {
-      });
-    }
+    // Back from a search (or a page reloaded during one): advertising on again
+    setSearchPause(false);
     
     renderSensorOverview().then(function(content) {
+      lastOverviewHtml = content;
       AppModal.open({
         title: "Setup Sensors",
-        icon: "--icon-sensor-hr-svg-data",
         content: content,
         buttons: [{ type: "cancel", label: "Close", className: "btn btn-regular btn-secondary", closeOnClick: true }],
         onCancel: function() {
           isSensorOverviewModalOpen = false; // Mark modal as closed
-          // Resume BLE Relay Server when modal is closed (via close button, backdrop, or ESC)
-          if (window.ApiV1 && typeof window.ApiV1.resumeBLERelayServer === "function") {
-            window.ApiV1.resumeBLERelayServer().catch(function(err) {
-            });
-          }
+          setSearchPause(false);
         },
         onOpen: function() {
+          attachTrainerHandlers(document);
           document.querySelectorAll(".sensor-add-btn").forEach(function(btn) {
             btn.addEventListener("click", function() {
               const type = btn.closest(".sensor-tile")?.getAttribute("data-type");
@@ -4953,6 +5261,7 @@ const BLESensorManager = (function () {
             btn.addEventListener("click", async function() {
               const name = btn.closest(".sensor-tile")?.getAttribute("data-name");
               if (name) {
+                btn.disabled = true;
                 if (window.ApiV1 && typeof window.ApiV1.deleteSensor === "function") {
                   try {
                     const result = await window.ApiV1.deleteSensor(name);
@@ -4960,8 +5269,10 @@ const BLESensorManager = (function () {
                       // Refresh the sensor overview after successful deletion
                       openSensorOverview();
                     } else {
+                      showSensorRemoveError(result.error);
                     }
                   } catch (err) {
+                    showSensorRemoveError(err && err.message);
                   }
                 } else {
                   // Fallback if function doesn't exist
@@ -4975,22 +5286,56 @@ const BLESensorManager = (function () {
     });
   }
 
+  function showSensorRemoveError(reason) {
+    isSensorOverviewModalOpen = false;
+    window.showErrorModal({ message: "The sensor could not be removed.", reason: reason ? String(reason) : undefined },
+                          { title: "Sensor Not Removed", buttonLabel: "Close", onClose: () => openSensorOverview() });
+  }
+
   const renderDiscoverContent = (type) => `<div class="discover-modal"><p class="modal-text-muted">Searching for ${window.escapeHtml(getSensorTypeLabel(type))} Sensors…</p></div>`;
 
-  function startDiscovery(type) {
+  // Progress bar mapped on the expected time: up to 95 %, then it waits for the result
+  let timedProgressTimer = null;
+  const renderTimedProgress = (note) => `<div class="fw-modal"><div class="fw-progress"><div class="fw-progress-bar" data-timed></div></div>${note ? `<p class="modal-text-muted">${note}</p>` : ""}</div>`;
+  function startTimedProgress(ms) {
+    clearInterval(timedProgressTimer);
+    const start = Date.now();
+    timedProgressTimer = setInterval(() => {
+      const bar = document.querySelector(".fw-progress-bar[data-timed]");
+      if (!bar) { clearInterval(timedProgressTimer); return; }
+      bar.style.width = `${Math.min(95, (Date.now() - start) / ms * 100)}%`;
+    }, 250);
+  }
+
+  // forTrainer: a power discovery that picks the trainer (trainer/setup)
+  function startDiscovery(type, forTrainer = false) {
     setState(STATE.DISCOVER_SENSORS);
     isSensorOverviewModalOpen = false; // FIX: Mark overview as closed when entering discovery
     currentDiscoveryType = type;
+    discoveryForTrainer = forTrainer;
     discoveredSensors = [];
     selectedSensor = null;
-    AppModal.open({ title: "Searching", icon: "--icon-spinner-svg-data", subline: `Searching for ${getSensorTypeLabel(type)} Sensors…`, buttons: [], actions: false });
+    AppModal.open({
+      title: "Searching",
+      icon: forTrainer ? "--icon-sensor-trainer-svg-data" : (SENSOR_ICON_VARS[type] || "--icon-sensor-hr-svg-data"),
+      subline: forTrainer ? "Searching for Trainers…" : `Searching for ${getSensorTypeLabel(type)} Sensors…`,
+      content: renderTimedProgress(),
+      buttons: [],
+      actions: false,
+      onOpen: () => startTimedProgress(window.TIMING.SEARCH_SCAN_MS),
+    });
     const startArduinoDiscovery = async () => {
+      await setSearchPause(true);
       if (window.ApiV1 && typeof window.ApiV1.discoveryStart === "function") {
         try {
           const result = await window.ApiV1.discoveryStart(type);
           if (!result.ok) {
             const timeout = (window.TIMING && window.TIMING.DISCOVERY_TIMEOUT_MS) || 2000;
             setTimeout(() => handleDiscoveryResult([]), timeout);
+          } else {
+            // Lost results must not leave advertising paused: 15 s scan + 5 s
+            clearTimeout(searchWatchdog);
+            searchWatchdog = setTimeout(() => handleDiscoveryResult([]), 20000);
           }
           // Discovery status will be updated via WebSocket frames
         } catch (e) {
@@ -5005,10 +5350,13 @@ const BLESensorManager = (function () {
 
   function renderSelectContent() {
     if (!discoveredSensors?.length) return "";
-    const iconClass = getSensorIconClass(currentDiscoveryType, true);
+    const iconClass = getSensorIconClass(discoveryForTrainer ? "TRAINER" : currentDiscoveryType, true);
     const sensorListHtml = discoveredSensors.map(sensor => {
       const isSelected = selectedSensor?.index === sensor.index;
-      return `<div class="sensor-item ${isSelected ? "selected" : ""}" data-index="${sensor.index}" data-name="${window.escapeHtml(sensor.Name || "")}"><div class="sensor-icon ${iconClass}"></div><div class="sensor-name">${window.escapeHtml(sensor.Name || "Unknown Sensor")}</div>${isSelected ? `<div class="sensor-check"></div>` : ""}</div>`;
+      const label = sensor.index < 0
+        ? `<div class="sensor-text"><div class="sensor-name">${window.escapeHtml(sensor.Name || "Power meter")}</div><span class="sensor-battery">Your power sensor: it will be removed from the power slot</span></div>`
+        : `<div class="sensor-name">${window.escapeHtml(sensor.Name || "Unknown Sensor")}</div>`;
+      return `<div class="sensor-item ${isSelected ? "selected" : ""}" data-index="${sensor.index}" data-name="${window.escapeHtml(sensor.Name || "")}"><div class="sensor-icon ${iconClass}"></div>${label}${isSelected ? `<div class="sensor-check"></div>` : ""}</div>`;
     }).join("");
     return `<div class="select-sensor"><div class="sensor-list">${sensorListHtml}</div></div>`;
   }
@@ -5018,12 +5366,12 @@ const BLESensorManager = (function () {
     isSensorOverviewModalOpen = false; // FIX: Ensure overview flag is false in select state
     let saveButton = null;
     AppModal.open({
-      title: `Found ${getSensorTypeLabel(currentDiscoveryType)} Sensors`,
-      icon: SENSOR_ICON_VARS[currentDiscoveryType] || "--icon-sensor-hr-svg-data",
-      subline: `Select your preferred ${getSensorTypeLabel(currentDiscoveryType)} Sensor`,
+      title: discoveryForTrainer ? "Found Devices" : `Found ${getSensorTypeLabel(currentDiscoveryType)} Sensors`,
+      icon: discoveryForTrainer ? "--icon-sensor-trainer-svg-data" : (SENSOR_ICON_VARS[currentDiscoveryType] || "--icon-sensor-hr-svg-data"),
+      subline: discoveryForTrainer ? "Select your trainer (not a power meter)" : `Select your preferred ${getSensorTypeLabel(currentDiscoveryType)} Sensor`,
       content: renderSelectContent(),
       buttons: [
-        { id: "search", type: "cancel", label: "Search", className: "btn btn-regular btn-tertiary", closeOnClick: false, onClick: () => startDiscovery(currentDiscoveryType) },
+        { id: "search", type: "cancel", label: "Search", className: "btn btn-regular btn-tertiary", closeOnClick: false, onClick: () => startDiscovery(currentDiscoveryType, discoveryForTrainer) },
         { id: "save", type: "save", label: "Save", className: "btn btn-regular btn-cta", closeOnClick: false, onClick: () => { if (selectedSensor && saveButton && !saveButton.disabled) saveSelectedSensor(); } }
       ],
       onOpen: () => {
@@ -5067,8 +5415,135 @@ const BLESensorManager = (function () {
     });
   }
 
+  async function saveSelectedTrainer() {
+    const before = configuredSensors.filter(s => s.Type === "CSC" || s.Type === "PWR").map(s => s.Name);
+    const slot = selectedSensor.index < 0 ? discoveredSensors.find(s => s.index < 0) : null;
+    // Before the request: its TRAINER_STATUS (running) may arrive before the response
+    trainerSetupWatch = { before, running: false };
+    trainerSlotNotice = "";
+    let error = null;
+    try {
+      const result = slot
+        ? await window.ApiV1.trainerSetupMac(slot.MAC, trainerName(slot.Name))
+        : await window.ApiV1.trainerSetup(selectedSensor.index);
+      if (!result.ok) error = String(result.error || "Unknown error");
+    } catch (e) {
+      error = (e && e.message) ? e.message : "Network error";
+    }
+    if (error !== null) {
+      trainerSetupWatch = null;
+      if (error.includes("no longer valid")) {
+        openError("Search Results Outdated", "The list is out of date. Please search again.");
+      } else if (typeof window.showErrorModal === "function") {
+        window.showErrorModal({ message: "The trainer could not be set up.", reason: error },
+                              { title: "Trainer Not Set Up", buttonLabel: "Close", onClose: () => openSensorOverview() });
+      }
+      return;
+    }
+    openTrainerReading(selectedSensor.Name);
+  }
+
+  // The setup runs in its own dialog until TRAINER_STATUS shows the result
+  let trainerReading = null;
+  function openTrainerReading(name) {
+    trainerReading = { timer: setTimeout(() => finishTrainerReading(null), window.TIMING.TRAINER_READ_MAX_MS) };
+    AppModal.open({
+      title: "Reading Trainer",
+      icon: "--icon-sensor-trainer-svg-data",
+      subline: name || "Trainer",
+      content: renderTimedProgress("Keep the trainer awake and close by."),
+      buttons: [],
+      actions: false,
+      onOpen: () => startTimedProgress(window.TIMING.TRAINER_READ_MS),
+    });
+  }
+
+  // setup: TRAINER_STATUS setup byte; null = no result in time
+  function finishTrainerReading(setup) {
+    if (!trainerReading) return;
+    clearTimeout(trainerReading.timer);
+    trainerReading = null;
+    if (setup === null) {
+      trainerSetupWatch = null;
+      openError("Trainer Not Set Up", "No result from Homewind. Check the trainer row in Setup Sensors.");
+      return;
+    }
+    if (setup !== 0) {
+      openError("Trainer Not Set Up", TRAINER_RESULTS[setup] || "The trainer could not be read. Try again.");
+      return;
+    }
+    const restart = () => {
+      isSensorOverviewModalOpen = false;
+      window.SystemManager.restart("Homewind restarts to activate the trainer…");
+    };
+    const apps = window.ApiV1.getAppsConnected();
+    const t = window.ApiV1.getTrainer();
+    if (!(apps !== null ? apps > 0 : t && t.appConnected)) {
+      restart();
+      return;
+    }
+    // Never restart under a ride on its own
+    const notice = trainerSlotNotice ? `<p class="modal-text-muted">${window.escapeHtml(trainerSlotNotice)}</p>` : "";
+    AppModal.open({
+      title: "Trainer Read",
+      icon: "--icon-checked-filled-svg-data",
+      content: `<div class="modal-content-centered"><p class="modal-text-muted">An app is connected to Homewind. Restart Homewind when your ride is over to activate the trainer.</p>${notice}</div>`,
+      buttons: [
+        { type: "cancel", label: "Later", className: "btn btn-regular btn-secondary", closeOnClick: false, onClick: () => openSensorOverview() },
+        { type: "save", label: "Restart", className: "btn btn-regular btn-cta", closeOnClick: false, onClick: restart },
+      ],
+      actions: false,
+    });
+  }
+
+  // trainer/setup name: at most 31 bytes, no '"', '\' or control characters
+  function trainerName(name) {
+    let out = "";
+    for (const ch of String(name || "").replace(/["\\\x00-\x1f]/g, "?")) {
+      if (new TextEncoder().encode(out + ch).length > 31) break;
+      out += ch;
+    }
+    return out;
+  }
+
+  // TRAINER_STATUS arrived: note a sensor slot the setup removed, then re-render
+  function updateTrainer() {
+    const t = window.ApiV1.getTrainer();
+    if (trainerSetupWatch && t) {
+      if (t.setup === 0xFE) {
+        trainerSetupWatch.running = true;
+      } else if (trainerSetupWatch.running) {
+        if (t.setup === 0) {
+          const names = (window.ApiV1.getState().sensors || []).map(s => s.name);
+          const removed = trainerSetupWatch.before.filter(n => !names.includes(n));
+          if (removed.length) trainerSlotNotice = `${removed.join(", ")} was removed from the sensors: it is now the trainer.`;
+          if (!trainerReading) trainerRestartWhen = () => true;
+        }
+        trainerSetupWatch = null;
+        if (trainerReading) {
+          finishTrainerReading(t.setup);
+          return;
+        }
+      }
+    }
+    // Restart at once, but never under a ride: with an app connected the Restart button stays.
+    // APP_STATUS counts apps on the relay too; without it only the mirror's app flag is known.
+    if (trainerRestartWhen && t && trainerRestartWhen(t)) {
+      trainerRestartWhen = null;
+      const apps = window.ApiV1.getAppsConnected();
+      const appConnected = apps !== null ? apps > 0 : t.appConnected;
+      if (!appConnected && t.setup !== 0xFE && trainerRestartNeeded(t) && window.SystemManager && typeof window.SystemManager.restart === "function") {
+        isSensorOverviewModalOpen = false;
+        window.SystemManager.restart("Homewind restarts to activate the trainer change…");
+        return;
+      }
+    }
+    if (isSensorOverviewModalOpen && currentState === STATE.SENSOR_OVERVIEW) updateSensorOverviewModal();
+  }
+
   async function saveSelectedSensor() {
     if (!selectedSensor || selectedSensor.index === undefined) return;
+    if (discoveryForTrainer) return saveSelectedTrainer();
     if (window.ApiV1 && typeof window.ApiV1.setSensor === "function") {
       let error = null;
       try {
@@ -5094,7 +5569,9 @@ const BLESensorManager = (function () {
     openSensorOverview();
   }
 
-  const renderErrorContent = () => `<div class="error-modal"><p class="modal-text-muted">Sorry no ${window.escapeHtml(getSensorTypeLabel(currentDiscoveryType))} Sensors found. Ensure sensors reachable and search again.</p></div>`;
+  const renderErrorContent = () => discoveryForTrainer
+    ? `<div class="error-modal"><p class="modal-text-muted">Sorry no trainer found. Wake the trainer up and search again.</p></div>`
+    : `<div class="error-modal"><p class="modal-text-muted">Sorry no ${window.escapeHtml(getSensorTypeLabel(currentDiscoveryType))} Sensors found. Ensure sensors reachable and search again.</p></div>`;
 
   function openError(title, message) {
     setState(STATE.ERROR);
@@ -5105,7 +5582,7 @@ const BLESensorManager = (function () {
       content: message ? `<div class="error-modal"><p class="modal-text-muted">${window.escapeHtml(message)}</p></div>` : renderErrorContent(),
       buttons: [
         { type: "cancel", label: "Return", className: "btn btn-regular btn-secondary", closeOnClick: false, onClick: () => openSensorOverview() },
-        { type: "save", label: "Search again", className: "btn btn-regular btn-tertiary", closeOnClick: false, onClick: () => startDiscovery(currentDiscoveryType) }
+        { type: "save", label: "Search again", className: "btn btn-regular btn-tertiary", closeOnClick: false, onClick: () => startDiscovery(currentDiscoveryType, discoveryForTrainer) }
       ],
       actions: false,
     });
@@ -5113,7 +5590,9 @@ const BLESensorManager = (function () {
 
   function handleDiscoveryResult(sensors) {
     if (currentState !== STATE.DISCOVER_SENSORS) return;
+    setSearchPause(false);
     discoveredSensors = Array.isArray(sensors) ? sensors : [];
+    if (discoveryForTrainer) discoveredSensors = trainerChoices(discoveredSensors);
     selectedSensor = null;
     (discoveredSensors.length > 0 ? openSelectSensor : openError)();
   }
@@ -5126,7 +5605,7 @@ const BLESensorManager = (function () {
     selectedSensor = null;
     discoveredSensors = [];
     currentDiscoveryType = null;
-    // Note: Resume is handled by onCancel callback in AppModal.open() config
+    setSearchPause(false);   // closed during a search
   }
 
   /**
@@ -5183,7 +5662,8 @@ const BLESensorManager = (function () {
    */
   function endBatchUpdate() {
     _batchUpdateActive = false;
-    if (_pendingRender && isSensorOverviewModalOpen) {
+    // Always refresh when the overview is open (empty snapshot leaves _pendingRender false)
+    if (isSensorOverviewModalOpen && currentState === STATE.SENSOR_OVERVIEW) {
       updateSensorOverviewModal();
     }
     _pendingRender = false;
@@ -5227,8 +5707,10 @@ const BLESensorManager = (function () {
       }
       
       const contentEl = backdropAfter.querySelector(".app-modal-content");
-      if (contentEl) {
+      if (contentEl && content !== lastOverviewHtml) {
+        lastOverviewHtml = content;
         contentEl.innerHTML = content;
+        attachTrainerHandlers(contentEl);
         
         // Re-attach event listeners to new buttons (FIX: scope to modal content, not document)
         contentEl.querySelectorAll(".sensor-add-btn").forEach(function(btn) {
@@ -5242,6 +5724,7 @@ const BLESensorManager = (function () {
           btn.addEventListener("click", async function() {
             const name = btn.closest(".sensor-tile")?.getAttribute("data-name");
             if (name) {
+              btn.disabled = true;
               if (window.ApiV1 && typeof window.ApiV1.deleteSensor === "function") {
                 try {
                   const result = await window.ApiV1.deleteSensor(name);
@@ -5249,8 +5732,10 @@ const BLESensorManager = (function () {
                     // Refresh the sensor overview after successful deletion
                     openSensorOverview();
                   } else {
+                    showSensorRemoveError(result.error);
                   }
                 } catch (err) {
+                  showSensorRemoveError(err && err.message);
                 }
               } else {
                 // Fallback if function doesn't exist
@@ -5264,7 +5749,7 @@ const BLESensorManager = (function () {
     });
   }
 
-  window.BLESensorManager = { open, close, handleDiscoveryResult, updateFromApi, beginBatchUpdate, endBatchUpdate };
+  window.BLESensorManager = { open, close, handleDiscoveryResult, updateFromApi, beginBatchUpdate, endBatchUpdate, updateTrainer };
   return window.BLESensorManager;
 })();
 
@@ -5332,11 +5817,19 @@ if (document.readyState === "loading") {
         },
         {
           type: "delete",
-          label: "Wifi Reset",
+          label: "WiFi Reset",
           className: "btn btn-regular btn-danger",
           closeOnClick: false,
           onClick: () => {
-            performWifiReset();
+            AppModal.open({
+              title: "Reset WiFi?",
+              icon: "--icon-error-svg-data",
+              content: `<div class="error-modal"><p class="modal-text-muted">Homewind forgets the WiFi network and starts setup again. Fans and sensors stay.</p></div>`,
+              buttons: [
+                { type: "cancel", label: "Cancel", className: "btn btn-regular btn-tertiary", closeOnClick: false, onClick: () => showResetConfirmation() },
+                { type: "delete", label: "Reset WiFi", className: "btn btn-regular btn-danger", closeOnClick: false, onClick: () => { performWifiReset(); return true; } },
+              ],
+            });
             return true;
           },
         },
@@ -5346,7 +5839,15 @@ if (document.readyState === "loading") {
           className: "btn btn-regular btn-danger",
           closeOnClick: false,
           onClick: () => {
-            performFactoryReset();
+            AppModal.open({
+              title: "Factory Reset?",
+              icon: "--icon-error-svg-data",
+              content: `<div class="error-modal"><p class="modal-text-muted">Deletes fans, sensors, trainer and WiFi. Homewind starts as new.</p></div>`,
+              buttons: [
+                { type: "cancel", label: "Cancel", className: "btn btn-regular btn-tertiary", closeOnClick: false, onClick: () => showResetConfirmation() },
+                { type: "delete", label: "Factory Reset", className: "btn btn-regular btn-danger", closeOnClick: false, onClick: () => { performFactoryReset(); return true; } },
+              ],
+            });
             return true;
           },
         },
@@ -5391,7 +5892,7 @@ if (document.readyState === "loading") {
    * @returns {void}
    * @private
    */
-  function performDeviceRestart() {
+  function performDeviceRestart(notice) {
     AppModal.open({
       title: "Restarting Device...",
       icon: "--icon-spinner-svg-data",
@@ -5399,7 +5900,7 @@ if (document.readyState === "loading") {
       content: `
         <div class="modal-content-centered">
           <p class="modal-text">
-            The device is restarting...
+            ${typeof notice === "string" ? window.escapeHtml(notice) : "The device is restarting..."}
           </p>
         </div>
       `,
@@ -5407,7 +5908,7 @@ if (document.readyState === "loading") {
       actions: false,
     });
 
-    fetch(DEVICE_RESTART_API_ENDPOINT, { method: "POST" })
+    fetch(DEVICE_RESTART_API_ENDPOINT, { method: "POST", headers: window.HW_POST_HEADERS })
       .then((response) => {
         if (!response.ok) {
           const err = new Error(`HTTP error! status: ${response.status}`);
@@ -5425,7 +5926,7 @@ if (document.readyState === "loading") {
           content: `
             <div class="modal-content-centered">
               <p class="modal-text">
-                The device is restarting. The page will reload automatically.
+                ${typeof notice === "string" ? window.escapeHtml(notice) : "The device is restarting."} The page will reload automatically.
               </p>
             </div>
           `,
@@ -5457,7 +5958,7 @@ if (document.readyState === "loading") {
           content: `
             <div class="modal-content-centered">
               <p class="modal-text">
-                The device is restarting. The page will reload automatically.
+                ${typeof notice === "string" ? window.escapeHtml(notice) : "The device is restarting."} The page will reload automatically.
               </p>
             </div>
           `,
@@ -5496,9 +5997,7 @@ if (document.readyState === "loading") {
     // Call WiFi reset API
     fetch(WIFI_RESET_API_ENDPOINT, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
+      headers: window.HW_POST_HEADERS,
     })
       .then((response) => {
         if (!response.ok) {
@@ -5567,9 +6066,7 @@ if (document.readyState === "loading") {
     // Call factory reset API
     fetch(FACTORY_RESET_API_ENDPOINT, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
+      headers: window.HW_POST_HEADERS,
     })
       .then((response) => {
         if (!response.ok) {
@@ -5647,7 +6144,7 @@ if (document.readyState === "loading") {
 
   /**
    * After the reboot: reads the factory-reset report from maintenance status
-   * ({attempted, failed_mask}; bit 0 settings, bit 1 WiFi) and shows the result.
+   * ({attempted, failed_mask}; bit 0 settings, bit 1 WiFi, bit 2 trainer) and shows the result.
    * @private
    */
   function showFactoryResetReport() {
@@ -5677,6 +6174,7 @@ if (document.readyState === "loading") {
         const failed = [];
         if (report && (report.failed_mask & 1)) failed.push("settings");
         if (report && (report.failed_mask & 2)) failed.push("WiFi");
+        if (report && (report.failed_mask & 4)) failed.push("trainer");
         throw new Error(failed.length ? "Could not erase: " + failed.join(", ") : "No reset report after reboot");
       })
       .catch((error) => {
@@ -5715,6 +6213,7 @@ if (document.readyState === "loading") {
   // Public API
   const SystemManager = {
     reset: showResetConfirmation,
+    restart: performDeviceRestart,
   };
 
   // Expose to global scope

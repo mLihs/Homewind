@@ -45,11 +45,20 @@
  * 
  * BIKE_METRICS (0x0D) - Delta (and once per client on connect):
  *   [power_w:int16][cadence_rpm:uint16][flags:uint8]   (hw::BikeMetrics, BikeMetrics.h)
- *   flags: bit0 power valid, bit1 cadence valid, bit2 cadence from power meter
+ *   flags: bit0 power valid, bit1 cadence valid, bit2 cadence from power meter,
+ *          bit3 power from the trainer (HW_ENABLE_TRAINER_MIRROR)
  *
  * FAN_CONTROL (0x0E) - Delta (and on connect), HW_ENABLE_FAN_POWER_MODE only:
  *   [mode][effective][reason][target_on][target_pct][dominant][power_state][ftp_w:uint16][cooldown:int8]
  *   (hw::FanControlStatus, FanControlFrame.h)
+ *
+ * TRAINER_STATUS (0x0F) - Delta (and once per client on connect), HW_ENABLE_TRAINER_MIRROR only:
+ *   [state:uint8][flags:uint8][setup:uint8][name_len:uint8][name:bytes]
+ *   state: BikeSensor::TrainerState; setup: TrainerCheck or BLERelayManager::kTrainerSetup*
+ *   flags: bit0 app connected, bit1 mirror (this boot), bit2 enabled (next boot), bit3 set up
+ *
+ * APP_STATUS (0x10) - Delta (and on connect), HW_ENABLE_BLE only:
+ *   [apps:uint8]   BLE centrals connected to Homewind (BikeSensor::centralCount()), mirror or relay
  */
 
 #include "WebSocketTelemetry.h"
@@ -117,6 +126,9 @@ WebSocketTelemetry::WebSocketTelemetry()
   , diagLastSummaryMs(0)
   , diagBuiltMask60s(0)
   , diagBuiltMaskLastFlush(0)
+#endif
+#if HW_ENABLE_BLE
+  , lastAppCount(0xFF)
 #endif
 {
 }
@@ -186,6 +198,16 @@ void WebSocketTelemetry::loopFlush() {
   }
   
   unsigned long now = millis();
+
+#if HW_ENABLE_BLE
+  // Apps on the relay or the mirror (any task, a short lock): a change sends APP_STATUS.
+  // Not before the relay is ready: buildAppStatus() drops the frame until then.
+  const uint8_t apps = BikeSensor::centralCount();
+  if (g_bleRelayManager && g_bleRelayManager->ready() && apps != lastAppCount) {
+    lastAppCount = apps;
+    markDirty(TelemetryFrameType::APP_STATUS);
+  }
+#endif
   
   // OPTIMIZATION: Process staged connect - spread heavy snapshots over time
   // Delay between stages: 150ms to let TCP buffers settle
@@ -204,6 +226,9 @@ void WebSocketTelemetry::loopFlush() {
         case 1:
           emitFrameToClient(stagedConnectTargetClientId, TelemetryFrameType::SENSORS_SNAPSHOT);
           emitFrameToClient(stagedConnectTargetClientId, TelemetryFrameType::BIKE_METRICS);
+#if HW_ENABLE_TRAINER_MIRROR
+          emitFrameToClient(stagedConnectTargetClientId, TelemetryFrameType::TRAINER_STATUS);
+#endif
           HW_DEBUG_PRINTLN("[WebSocketTelemetry] Staged connect: SENSORS_SNAPSHOT, BIKE_METRICS");
           break;
         case 2:
@@ -230,6 +255,12 @@ void WebSocketTelemetry::loopFlush() {
       emitFrameToClient(requested[i], TelemetryFrameType::SENSORS_SNAPSHOT);
       emitFrameToClient(requested[i], TelemetryFrameType::FANS_SNAPSHOT);
       emitFrameToClient(requested[i], TelemetryFrameType::BIKE_METRICS);
+#if HW_ENABLE_TRAINER_MIRROR
+      emitFrameToClient(requested[i], TelemetryFrameType::TRAINER_STATUS);
+#endif
+#if HW_ENABLE_BLE
+      emitFrameToClient(requested[i], TelemetryFrameType::APP_STATUS);
+#endif
     }
   }
 
@@ -276,7 +307,7 @@ void WebSocketTelemetry::loopFlush() {
     
 #if HW_TELEMETRY_DIAG_PRINT_FRAME_LIST
     if (builtMask != 0) {
-      static const char* kFrameNames[14] = {
+      static const char* kFrameNames[16] = {
         "SYSTEM_STATUS",
         "SENSORS_SNAPSHOT",
         "SENSOR_CONN_STATE",
@@ -291,11 +322,13 @@ void WebSocketTelemetry::loopFlush() {
         nullptr,  // 0x0C CLIENT_ID: control frame, never marked dirty
         "BIKE_METRICS",
         "FAN_CONTROL",
+        "TRAINER_STATUS",
+        "APP_STATUS",
       };
       
       HW_DEBUG_PRINT("[TelDiag] built: ");
       bool first = true;
-      for (uint8_t i = 0; i < 14; i++) {
+      for (uint8_t i = 0; i < 16; i++) {
         if ((builtMask & (1U << i)) && kFrameNames[i]) {
           if (!first) HW_DEBUG_PRINT(",");
           HW_DEBUG_PRINT(kFrameNames[i]);
@@ -349,9 +382,9 @@ void WebSocketTelemetry::markDirty(TelemetryFrameType frameType) {
   }
   
   uint8_t frameId = static_cast<uint8_t>(frameType);
-  static_assert(static_cast<uint8_t>(TelemetryFrameType::FAN_CONTROL) <= 16, "dirtyFlags is 16 bits");
-  if (frameId >= 1 && frameId <= static_cast<uint8_t>(TelemetryFrameType::FAN_CONTROL)) {
-    dirtyFlags.fetch_or(static_cast<uint16_t>(1U << (frameId - 1))); // Frame IDs are 1-14, bitfield uses 0-13
+  static_assert(static_cast<uint8_t>(TelemetryFrameType::APP_STATUS) <= 16, "dirtyFlags is 16 bits");
+  if (frameId >= 1 && frameId <= static_cast<uint8_t>(TelemetryFrameType::APP_STATUS)) {
+    dirtyFlags.fetch_or(static_cast<uint16_t>(1U << (frameId - 1))); // Frame IDs are 1-16, bitfield uses 0-15
   }
 }
 
@@ -403,6 +436,12 @@ void WebSocketTelemetry::onWebSocketEvent(AsyncWebSocket* server, AsyncWebSocket
       HW_DEBUG_PRINTF("[WebSocketTelemetry] Client #%u connected from %d.%d.%d.%d\n", 
                     client->id(), ip[0], ip[1], ip[2], ip[3]);
 
+      // AsyncWebServer turns Nagle off for every connection: then each small frame takes its own
+      // TCP segment (~2 KB internal RAM until acked); a snapshot burst to two clients cost ~40 KB.
+      if (client->client()) {
+        client->client()->setNoDelay(false);
+      }
+
       // Send client id to the connecting client (unicast).
       // This allows the WebUI to request unicast heavy snapshots via /telemetry/refresh?client_id=...
       // without resorting to broadcast bursts (important for cold loads / multi-client).
@@ -448,6 +487,9 @@ void WebSocketTelemetry::onWebSocketEvent(AsyncWebSocket* server, AsyncWebSocket
       g_telemetryInstance->markDirty(TelemetryFrameType::HEART_RATE_SETTINGS);
 #if HW_ENABLE_FAN_POWER_MODE
       g_telemetryInstance->markDirty(TelemetryFrameType::FAN_CONTROL);
+#endif
+#if HW_ENABLE_BLE
+      g_telemetryInstance->markDirty(TelemetryFrameType::APP_STATUS);
 #endif
 
       // IMPORTANT (heap stability): only push heavy snapshots on the FIRST client connect.
@@ -557,6 +599,16 @@ void WebSocketTelemetry::emitFrameToClient(uint32_t clientId, TelemetryFrameType
     case TelemetryFrameType::FAN_CONTROL:
       payloadLen = buildFanControl(frameBuffer + 1, MAX_FRAME_SIZE - 1);
       break;
+#if HW_ENABLE_TRAINER_MIRROR
+    case TelemetryFrameType::TRAINER_STATUS:
+      payloadLen = buildTrainerStatus(frameBuffer + 1, MAX_FRAME_SIZE - 1);
+      break;
+#endif
+#if HW_ENABLE_BLE
+    case TelemetryFrameType::APP_STATUS:
+      payloadLen = buildAppStatus(frameBuffer + 1, MAX_FRAME_SIZE - 1);
+      break;
+#endif
     default:
       payloadLen = 0;
       break;
@@ -619,6 +671,16 @@ void WebSocketTelemetry::emitFrame(TelemetryFrameType frameType) {
     case TelemetryFrameType::FAN_CONTROL:
       payloadLen = buildFanControl(frameBuffer + 1, MAX_FRAME_SIZE - 1);
       break;
+#if HW_ENABLE_TRAINER_MIRROR
+    case TelemetryFrameType::TRAINER_STATUS:
+      payloadLen = buildTrainerStatus(frameBuffer + 1, MAX_FRAME_SIZE - 1);
+      break;
+#endif
+#if HW_ENABLE_BLE
+    case TelemetryFrameType::APP_STATUS:
+      payloadLen = buildAppStatus(frameBuffer + 1, MAX_FRAME_SIZE - 1);
+      break;
+#endif
     default:
       return; // Unknown frame type
   }
@@ -1198,6 +1260,34 @@ size_t WebSocketTelemetry::buildFanControl(uint8_t* buffer, size_t bufferSize) {
 #endif
   return 0;
 }
+
+#if HW_ENABLE_TRAINER_MIRROR
+size_t WebSocketTelemetry::buildTrainerStatus(uint8_t* buffer, size_t bufferSize) {
+  // Format: [state:uint8][flags:uint8][setup:uint8][name_len:uint8][name:bytes]
+  BLERelayManager::TrainerStatus s;
+  if (!g_bleRelayManager || !g_bleRelayManager->ready() || bufferSize < 4 + sizeof(s.name)) {
+    return 0;
+  }
+  g_bleRelayManager->trainerStatus(s);
+  const uint8_t flags = (s.appConnected ? 0x01 : 0) | (s.mirror ? 0x02 : 0) | (s.enabled ? 0x04 : 0) |
+                        (s.mac[0] != '\0' ? 0x08 : 0);
+  size_t offset = 0;
+  offset = writeUint8(buffer, offset, s.state);
+  offset = writeUint8(buffer, offset, flags);
+  offset = writeUint8(buffer, offset, s.setup);
+  return writeString(buffer, offset, s.name, sizeof(s.name) - 1);
+}
+#endif
+
+#if HW_ENABLE_BLE
+size_t WebSocketTelemetry::buildAppStatus(uint8_t* buffer, size_t bufferSize) {
+  // Format: [apps:uint8]
+  if (!g_bleRelayManager || !g_bleRelayManager->ready() || bufferSize < 1) {
+    return 0;
+  }
+  return writeUint8(buffer, 0, BikeSensor::centralCount());
+}
+#endif
 
 void WebSocketTelemetry::sendFullSnapshot() {
   // Send all snapshot frames on client connect (reconnect safety)

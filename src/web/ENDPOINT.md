@@ -35,6 +35,8 @@ All static assets are automatically loaded from the manifest and registered.
 
 All action endpoints use **POST** with query parameters or form-urlencoded data. No JSON.
 
+Action POSTs (and `POST /api/v1/settings/set`) require header `X-Homewind: 1` or the device answers 403.
+
 ### Sensor Actions
 
 | Method | Route | Description |
@@ -53,10 +55,23 @@ All action endpoints use **POST** with query parameters or form-urlencoded data.
 | POST | `/api/v1/action/discovery/start` | Start sensor discovery |
 | POST | `/api/v1/action/discovery/stop` | Stop sensor discovery |
 
+### Trainer Actions (`HW_ENABLE_TRAINER_MIRROR` only, `tools/build.sh --trainer`)
+
+| Method | Route | Description |
+|--------|-------|-------------|
+| POST | `/api/v1/action/trainer/setup` | Read the trainer into the mirror table: `generation` + `index` of `DISCOVERY_RESULTS` (WebUI), or `mac` + optional `name`. Runs in the background (status `setup`); active after a restart |
+| POST | `/api/v1/action/trainer/enable` | `on=true\|false`: mirror the trainer after the next restart, or release it |
+| POST | `/api/v1/action/trainer/forget` | Erase the stored trainer and its table; mirror off after the next restart |
+| GET | `/api/v1/action/trainer/status` | JSON `{enabled, mirror, state, app_connected, setup, name, mac}` (same data as the `TRAINER_STATUS` frame) |
+
+409 answers (text): `Besides the heart-rate strap, at most two devices`, `This device is the trainer`, `Discovery or trainer setup running`, `No trainer set up`, `Discovery result no longer valid`. Details: `docs/05_APIS.md`.
+
 ### Fan Actions
 
 | Method | Route | Description |
 |--------|-------|-------------|
+| POST | `/api/v1/action/fan/add` | Add fan by 32-hex token (`?token=`). Used by WebUI and by Token Extractor / external tools — see `docs/05_APIS.md` |
+| POST | `/api/v1/action/fan/update` | Replace a fan token (`old_token`, `new_token`) |
 | POST | `/api/v1/action/fan/control` | Control fan (Power, Speed, etc.) |
 | POST | `/api/v1/action/fan/discovery/start` | Start fan discovery |
 | POST | `/api/v1/action/fan/discovery/stop` | Stop fan discovery |
@@ -132,6 +147,8 @@ Settings API for persistent configuration.
 | 0x09 | `FIRMWARE_PROGRESS` | Firmware update progress (Delta) |
 | 0x0D | `BIKE_METRICS` | Power and cadence with validity flags (Delta) |
 | 0x0E | `FAN_CONTROL` | Fan mode and acknowledged fan target (Delta; `HW_ENABLE_FAN_POWER_MODE` test firmware only) |
+| 0x0F | `TRAINER_STATUS` | Trainer mirror state, flags, setup result, name (Delta; `HW_ENABLE_TRAINER_MIRROR` only) |
+| 0x10 | `APP_STATUS` | Number of apps (BLE centrals) connected to Homewind (Delta; `HW_ENABLE_BLE`) |
 
 **Behavior**:
 - **Snapshot Frames**: Full state (on connect + periodically every 30s)

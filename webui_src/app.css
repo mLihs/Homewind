@@ -70,7 +70,6 @@
     --font-size-body-small: 12px;
 
     /* Font Sizes - UI Components */
-    --font-size-close: 20px;
     --font-size-picker: 20px;
     --font-size-firmware-large: 0.9rem;
     --font-size-firmware-small: 0.85rem;
@@ -110,8 +109,10 @@
     --icon-sensor-hr-grayscale-svg-data: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='28' height='25' fill='none'%3E%3Cpath fill='%23AFBDD4' d='M20.414 0a7.376 7.376 0 0 0-3.724 1.08A7.531 7.531 0 0 0 14 3.91a7.531 7.531 0 0 0-2.69-2.83A7.376 7.376 0 0 0 7.586 0 7.878 7.878 0 0 0 2.1 2.588 8.135 8.135 0 0 0 .006 8.355c0 5.388 5.581 11.273 10.262 15.263A5.745 5.745 0 0 0 14 25c1.365 0 2.687-.49 3.732-1.382 4.68-3.99 10.262-9.875 10.262-15.263A8.135 8.135 0 0 0 25.9 2.588 7.878 7.878 0 0 0 20.414 0Z'/%3E%3C/svg%3E");
     --icon-sensor-csc-svg-data: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='25' height='25' fill='none'%3E%3Cpath fill='%2325ADD3' fill-rule='evenodd' d='M7.243 7.243a7 7 0 0 1 7.3-1.645l4.72-4.72a3 3 0 0 1 4.243 4.243l-4.72 4.72a7 7 0 0 1-8.945 8.945l-4.72 4.72A3 3 0 0 1 .88 19.263l4.72-4.72a7 7 0 0 1 1.644-7.3Zm-4.05 12.95a1.001 1.001 0 1 0 0 2.001 1.001 1.001 0 0 0 0-2.002Zm8.292-8.708A1 1 0 0 0 12.9 12.9l9.192-9.193a1 1 0 0 0-1.414-1.414l-9.193 9.192Z' clip-rule='evenodd'/%3E%3C/svg%3E");
     --icon-sensor-csc-grayscale-svg-data: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='25' height='25' fill='none'%3E%3Cpath fill='%23AFBDD4' fill-rule='evenodd' d='M7.243 7.243a7 7 0 0 1 7.3-1.645l4.72-4.72a3 3 0 0 1 4.243 4.243l-4.72 4.72a7 7 0 0 1-8.945 8.945l-4.72 4.72A3 3 0 0 1 .88 19.263l4.72-4.72a7 7 0 0 1 1.644-7.3Zm-4.05 12.95a1.001 1.001 0 1 0 0 2.001 1.001 1.001 0 0 0 0-2.002Zm8.292-8.708A1 1 0 0 0 12.9 12.9l9.192-9.193a1 1 0 0 0-1.414-1.414l-9.193 9.192Z' clip-rule='evenodd'/%3E%3C/svg%3E");
-    --icon-sensor-pwr-svg-data: url("data:image/svg+xml,%3Csvg width='32' height='32' viewBox='0 0 32 32' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M16 4L20 12H12L16 4Z' fill='%2310A95B'/%3E%3Cpath d='M8 14L14 18L8 22V14Z' fill='%2310A95B'/%3E%3Cpath d='M24 14V22L18 18L24 14Z' fill='%2310A95B'/%3E%3Cpath d='M16 20L12 28H20L16 20Z' fill='%2310A95B'/%3E%3C/svg%3E");
-    --icon-sensor-pwr-grayscale-svg-data: url("data:image/svg+xml,%3Csvg width='32' height='32' viewBox='0 0 32 32' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M16 4L20 12H12L16 4Z' fill='%23AFBDD4'/%3E%3Cpath d='M8 14L14 18L8 22V14Z' fill='%23AFBDD4'/%3E%3Cpath d='M24 14V22L18 18L24 14Z' fill='%23AFBDD4'/%3E%3Cpath d='M16 20L12 28H20L16 20Z' fill='%23AFBDD4'/%3E%3C/svg%3E");
+    --icon-sensor-pwr-svg-data: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18.6667' height='26.6667' viewBox='0 0 18.6667 26.6667' fill='none'%3E%3Cpath fill='%237A5AF8' d='M12 0L0 16H8L6.66667 26.6667L18.6667 10.6667H10.6667L12 0Z'/%3E%3C/svg%3E");
+    --icon-sensor-pwr-grayscale-svg-data: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18.6667' height='26.6667' viewBox='0 0 18.6667 26.6667' fill='none'%3E%3Cpath fill='%23AFBDD4' d='M12 0L0 16H8L6.66667 26.6667L18.6667 10.6667H10.6667L12 0Z'/%3E%3C/svg%3E");
+    --icon-sensor-trainer-svg-data: url("data:image/svg+xml,%3Csvg preserveAspectRatio='none' overflow='visible' style='display: block;' width='32' height='32' viewBox='0 0 32 32' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cg id='List Icon'%3E%3Cg id='Subtract'%3E%3Cpath d='M15.96 13.0635C16.6116 12.7106 17.3947 12.6971 18.0576 13.0283C19.1439 13.5715 19.6111 14.8735 19.1182 15.9834L16.0264 22.9385C12.1351 22.4662 9.10733 19.203 9.00488 15.209C9.58351 15.3734 10.1234 15.6298 10.6074 15.9619L15.96 13.0635ZM17 14C16.4477 14 16 14.4477 16 15C16 15.5523 16.4477 16 17 16C17.5523 16 18 15.5523 18 15C18 14.4477 17.5523 14 17 14Z' fill-rule='evenodd' clip-rule='evenodd' fill='%2306BB60'/%3E%3Cpath d='M17 3C23.6274 3 29 8.37258 29 15C29 19.4896 26.5328 23.4002 22.8818 25.458L29.3359 27.7627C29.7337 27.9048 29.9997 28.2818 30 28.7041V29C29.9998 29.5521 29.5522 30 29 30H7.82617C6.79188 29.9999 5.9286 29.2107 5.83496 28.1807L5.60547 25.6641C3.50159 24.892 2.00015 22.8715 2 20.5C2.00018 18.3572 3.22621 16.5014 5.01465 15.5938C5.00506 15.397 5 15.1991 5 15C5 8.37258 10.3726 3 17 3ZM17 5C11.4772 5 7 9.47715 7 15C7 20.5228 11.4772 25 17 25C19.4755 25 21.739 24.0984 23.4854 22.6084C23.5063 22.5906 23.5271 22.5727 23.5479 22.5547C23.913 22.2379 24.2544 21.8952 24.5703 21.5293C24.5864 21.5106 24.6031 21.4924 24.6191 21.4736C24.6839 21.3975 24.7471 21.3202 24.8096 21.2422C24.8335 21.2124 24.8573 21.1825 24.8809 21.1523C25.0753 20.9036 25.2581 20.6457 25.4287 20.3789C25.4562 20.336 25.4839 20.2933 25.5107 20.25C25.5555 20.1777 25.5977 20.1038 25.6406 20.0303C25.6722 19.9761 25.7038 19.922 25.7344 19.8672C25.7709 19.8018 25.8067 19.7362 25.8418 19.6699C25.8804 19.597 25.9172 19.5232 25.9541 19.4492C25.9808 19.3955 26.0084 19.3423 26.0342 19.2881C26.0862 19.1788 26.1364 19.0685 26.1846 18.957C26.2323 18.8464 26.2775 18.7347 26.3213 18.6221C26.3379 18.5794 26.3551 18.537 26.3711 18.4941C26.3941 18.4324 26.4156 18.37 26.4375 18.3076C26.4659 18.2267 26.4932 18.1453 26.5195 18.0635C26.5384 18.0047 26.5574 17.9459 26.5752 17.8867C26.6054 17.7865 26.634 17.6856 26.6611 17.584C26.6744 17.5343 26.6877 17.4846 26.7002 17.4346C26.7718 17.1486 26.8306 16.8577 26.877 16.5625C26.8841 16.5171 26.89 16.4714 26.8965 16.4258C26.9119 16.3182 26.9256 16.2102 26.9375 16.1016C26.9433 16.0483 26.9491 15.9949 26.9541 15.9414C26.9633 15.8429 26.9702 15.7439 26.9766 15.6445C26.9807 15.5802 26.9854 15.5158 26.9883 15.4512C26.9949 15.3016 27 15.1512 27 15C27 9.47715 22.5228 5 17 5Z' fill-rule='evenodd' clip-rule='evenodd' fill='%2306BB60'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");
+    --icon-sensor-trainer-grayscale-svg-data: url("data:image/svg+xml,%3Csvg preserveAspectRatio='none' overflow='visible' style='display: block;' width='32' height='32' viewBox='0 0 32 32' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cg id='Trainer_Inactive'%3E%3Cg id='Subtract'%3E%3Cpath d='M15.96 13.0635C16.6116 12.7106 17.3947 12.6971 18.0576 13.0283C19.1439 13.5715 19.6111 14.8735 19.1182 15.9834L16.0264 22.9385C12.1351 22.4662 9.10733 19.203 9.00488 15.209C9.58351 15.3734 10.1234 15.6298 10.6074 15.9619L15.96 13.0635ZM17 14C16.4477 14 16 14.4477 16 15C16 15.5523 16.4477 16 17 16C17.5523 16 18 15.5523 18 15C18 14.4477 17.5523 14 17 14Z' fill-rule='evenodd' clip-rule='evenodd' fill='%23AFBDD4'/%3E%3Cpath d='M17 3C23.6274 3 29 8.37258 29 15C29 19.4896 26.5328 23.4002 22.8818 25.458L29.3359 27.7627C29.7337 27.9048 29.9997 28.2818 30 28.7041V29C29.9998 29.5521 29.5522 30 29 30H7.82617C6.79188 29.9999 5.9286 29.2107 5.83496 28.1807L5.60547 25.6641C3.50159 24.892 2.00015 22.8715 2 20.5C2.00018 18.3572 3.22621 16.5014 5.01465 15.5938C5.00506 15.397 5 15.1991 5 15C5 8.37258 10.3726 3 17 3ZM17 5C11.4772 5 7 9.47715 7 15C7 20.5228 11.4772 25 17 25C19.4755 25 21.739 24.0984 23.4854 22.6084C23.5063 22.5906 23.5271 22.5727 23.5479 22.5547C23.913 22.2379 24.2544 21.8952 24.5703 21.5293C24.5864 21.5106 24.6031 21.4924 24.6191 21.4736C24.6839 21.3975 24.7471 21.3202 24.8096 21.2422C24.8335 21.2124 24.8573 21.1825 24.8809 21.1523C25.0753 20.9036 25.2581 20.6457 25.4287 20.3789C25.4562 20.336 25.4839 20.2933 25.5107 20.25C25.5555 20.1777 25.5977 20.1038 25.6406 20.0303C25.6722 19.9761 25.7038 19.922 25.7344 19.8672C25.7709 19.8018 25.8067 19.7362 25.8418 19.6699C25.8804 19.597 25.9172 19.5232 25.9541 19.4492C25.9808 19.3955 26.0084 19.3423 26.0342 19.2881C26.0862 19.1788 26.1364 19.0685 26.1846 18.957C26.2323 18.8464 26.2775 18.7347 26.3213 18.6221C26.3379 18.5794 26.3551 18.537 26.3711 18.4941C26.3941 18.4324 26.4156 18.37 26.4375 18.3076C26.4659 18.2267 26.4932 18.1453 26.5195 18.0635C26.5384 18.0047 26.5574 17.9459 26.5752 17.8867C26.6054 17.7865 26.634 17.6856 26.6611 17.584C26.6744 17.5343 26.6877 17.4846 26.7002 17.4346C26.7718 17.1486 26.8306 16.8577 26.877 16.5625C26.8841 16.5171 26.89 16.4714 26.8965 16.4258C26.9119 16.3182 26.9256 16.2102 26.9375 16.1016C26.9433 16.0483 26.9491 15.9949 26.9541 15.9414C26.9633 15.8429 26.9702 15.7439 26.9766 15.6445C26.9807 15.5802 26.9854 15.5158 26.9883 15.4512C26.9949 15.3016 27 15.1512 27 15C27 9.47715 22.5228 5 17 5Z' fill-rule='evenodd' clip-rule='evenodd' fill='%23AFBDD4'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");
     --icon-firmware-available-svg-data: url("data:image/svg+xml,%3Csvg width='112' height='112' viewBox='0 0 112 112' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cg clip-path='url(%23clip0_3026_24372)'%3E%3Cpath d='M112 56C112 86.9279 86.9279 112 56 112C25.0721 112 0 86.9279 0 56C0 25.0721 25.0721 0 56 0C86.9279 0 112 25.0721 112 56Z' fill='%2310A95B'/%3E%3Cpath d='M79.6928 35.3267C80.4325 34.6014 81.4503 34.1934 82.5096 34.1934C83.569 34.1934 84.5867 34.6014 85.3264 35.3267C86.0661 36.0521 86.4745 37.0552 86.4745 38.0994C86.4745 39.1437 86.0661 40.1468 85.3264 40.8721L52.8264 73.3721C52.451 73.7472 51.9981 74.0454 51.4961 74.2474C50.9941 74.4494 50.4532 74.5515 49.9077 74.5487C49.3621 74.5459 48.8225 74.4384 48.3239 74.2333C47.8253 74.0282 47.3789 73.7308 47.0103 73.3614L30.677 57.0281C29.9372 56.3028 29.5288 55.2997 29.5288 54.2554C29.5288 53.2112 29.9372 52.2081 30.677 51.4827C31.4167 50.7574 32.4345 50.3494 33.4938 50.3494C34.5532 50.3494 35.5709 50.7574 36.3106 51.4827L49.8586 65.0307L79.6928 35.3267Z' fill='white'/%3E%3C/g%3E%3Cdefs%3E%3CclipPath id='clip0_3026_24372'%3E%3Crect width='112' height='112' fill='white'/%3E%3C/clipPath%3E%3C/defs%3E%3C/svg%3E");
     --icon-firmware-unavailable-svg-data: url("data:image/svg+xml,%3Csvg width='112' height='112' viewBox='0 0 112 112' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cg clip-path='url(%23clip0_3026_24381)'%3E%3Cpath d='M112 56C112 86.9279 86.9279 112 56 112C25.0721 112 0 86.9279 0 56C0 25.0721 25.0721 0 56 0C86.9279 0 112 25.0721 112 56Z' fill='%23B3B3B3'/%3E%3Cpath d='M74.6274 37.3726C73.8877 36.6473 72.8699 36.2393 71.8106 36.2393C70.7512 36.2393 69.7335 36.6473 68.9938 37.3726L56 50.3664L43.0062 37.3726C42.2665 36.6473 41.2488 36.2393 40.1894 36.2393C39.1301 36.2393 38.1123 36.6473 37.3726 37.3726C36.6473 38.1123 36.2393 39.1301 36.2393 40.1894C36.2393 41.2488 36.6473 42.2665 37.3726 43.0062L50.3664 56L37.3726 68.9938C36.6473 69.7335 36.2393 70.7512 36.2393 71.8106C36.2393 72.8699 36.6473 73.8877 37.3726 74.6274C38.1123 75.353 39.1301 75.7613 40.1894 75.7613C41.2488 75.7613 42.2665 75.353 43.0062 74.6274L56 61.6336L68.9938 74.6274C69.7335 75.353 70.7512 75.7613 71.8106 75.7613C72.8699 75.7613 73.8877 75.353 74.6274 74.6274C75.353 73.8877 75.7613 72.8699 75.7613 71.8106C75.7613 70.7512 75.353 69.7335 74.6274 68.9938L61.6336 56L74.6274 43.0062C75.353 42.2665 75.7613 41.2488 75.7613 40.1894C75.7613 39.1301 75.353 38.1123 74.6274 37.3726Z' fill='white'/%3E%3C/g%3E%3Cdefs%3E%3CclipPath id='clip0_3026_24381'%3E%3Crect width='112' height='112' fill='white'/%3E%3C/clipPath%3E%3C/defs%3E%3C/svg%3E");
   }
@@ -239,11 +240,18 @@
   }
 
   /* Power & cadence card (reuses the HR range row) */
+  .bike-card .hr-range-row {
+    padding: 0 var(--spc-xl);
+  }
+
   .bike-metric {
     flex: 1;
-    border: var(--button-outline);
-    border-radius: var(--radius-md);
     padding: 10px var(--spc-lg) var(--spc-md) var(--spc-lg);
+  }
+
+  /* Power source configured but not connected (BIKE_METRICS power not valid) */
+  .bike-metric-inactive {
+    opacity: 0.5;
   }
 
   .bike-unit {
@@ -254,8 +262,7 @@
   }
 
   .bike-hint {
-    padding: 0 var(--spc-xl) var(--spc-xl);
-    margin-top: calc(-1 * var(--spc-md));
+    padding: 0 calc(var(--spc-xl) + var(--spc-lg)) var(--spc-md);
     font-size: var(--font-size-body-small);
     color: var(--text-muted);
   }
@@ -329,6 +336,11 @@
 
   #fanmode-hint {
     text-align: center;
+  }
+
+  /* Below the cool-down bar: its 16 px bottom margin ends the card; same gap above as below */
+  #hr-card.fanmode-shaped #fanmode-hint {
+    margin-top: calc(-1 * var(--spc-md));
   }
 
   #hr-card.fanmode .hr-header {
@@ -580,7 +592,7 @@
   .btn-small{
     height: 24px;
     font-size: var(--font-size-body-small);
-    width: 64px;
+    width: 72px;
   }
 
 
@@ -690,6 +702,11 @@
   .w3 {
     opacity: 30%;
     animation: move3 6s ease-in-out infinite;
+  }
+
+  /* The waves force a layout every frame: paused while a dialog covers them */
+  .app-modal-open .w1, .app-modal-open .w2, .app-modal-open .w3 {
+    animation-play-state: paused;
   }
 
   @keyframes move1 {
@@ -826,16 +843,19 @@
     margin-top: var(--spc-md);
     color: var(--text-muted);
     font-size: var(--font-size-body-medium);
+    text-align: center;
   }
 
 
   .app-modal-close {
     border: none;
     background: transparent;
-    font-size: var(--font-size-close);
-    line-height: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
     cursor: pointer;
-    padding: var(--spc-sm);
+    padding: 0;
     transition: filter var(--transition-fast);
     color: var(--text-main);
     margin-left: -32px;
@@ -1120,6 +1140,32 @@
     background-image: var(--icon-sensor-pwr-grayscale-svg-data);
   }
 
+  .sensor-icon-trainer {
+    background-image: var(--icon-sensor-trainer-svg-data);
+  }
+
+  .sensor-icon-trainer-grayscale {
+    background-image: var(--icon-sensor-trainer-grayscale-svg-data);
+  }
+
+  /* 32 px artboard with its own padding (the HR/CSC/PWR icons are cropped to 28 px) */
+  .sensor-icon-trainer, .sensor-icon-trainer-grayscale {
+    width: 32px;
+    height: 32px;
+    margin: 0;
+  }
+
+  .sensor-actions {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spc-sm);
+    flex-shrink: 0;
+  }
+  /* Device rule full: the row cannot be added (the Add button greys itself) */
+  .sensor-tile-disabled .sensor-info {
+    opacity: 0.4;
+  }
+
   .sensor-text {
     display: flex;
     flex-direction: column;
@@ -1133,6 +1179,8 @@
     font-weight: var(--font-weight-medium);
     color: var(--text-main);
     line-height: 1.2;
+    /* BLE names without spaces would run under the buttons */
+    overflow-wrap: anywhere;
   }
 
   .sensor-battery {
@@ -1144,6 +1192,7 @@
 
   .sensor-status {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: var(--spc-sm);
     font-size: var(--font-size-body-small);
@@ -1155,6 +1204,16 @@
     padding: 2px 6px;
     border-radius: 4px;
     font-size: 11px;
+  }
+
+  /* Same look as the WebSocket "Connected" indicator */
+  .sensor-badge {
+    padding: 4px 8px;
+    font-size: 11px;
+    color: #fff;
+    background: rgba(0, 165, 84, 0.8);
+    border-radius: 4px;
+    white-space: nowrap;
   }
 
   .sensor-status-connected .sensor-conn-indicator {

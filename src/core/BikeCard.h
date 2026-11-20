@@ -1,6 +1,6 @@
 /**
  * @file BikeCard.h
- * @brief Arduino-free state of the display's cadence card (CSC and power meter)
+ * @brief Arduino-free state of the display's cadence card (CSC, power meter, trainer)
  *
  * Shared by DisplayManager and tests/bike_card_test.cpp.
  */
@@ -16,21 +16,27 @@ enum class BikeCardState : uint8_t { NotConfigured, Inactive, Active };
 
 struct BikeCard {
   BikeCardState state;
-  bool nameFromPower;  // show the power meter's name, else the CSC sensor's
-  bool showPower;      // power meter connected
+  bool nameFromPower;    // show the power meter's name, else the CSC sensor's
+  bool showPower;        // power meter connected, or trainer ready (D2)
+  bool nameFromTrainer;  // show the trainer's name (overrides nameFromPower)
 };
 
-// A connected sensor is also configured.
+// A connected sensor is also configured. Trainer: configured = mirrored this
+// boot, ready = connected and discovered; its power only without a meter (D2).
 inline BikeCard selectBikeCard(bool cscConfigured, bool cscConnected,
-                               bool pwrConfigured, bool pwrConnected) {
+                               bool pwrConfigured, bool pwrConnected,
+                               bool trainerConfigured = false, bool trainerReady = false) {
   BikeCard c;
-  if (!cscConfigured && !pwrConfigured) {
+  if (!cscConfigured && !pwrConfigured && !trainerConfigured) {
     c.state = BikeCardState::NotConfigured;
   } else {
-    c.state = (cscConnected || pwrConnected) ? BikeCardState::Active : BikeCardState::Inactive;
+    c.state = (cscConnected || pwrConnected || trainerReady) ? BikeCardState::Active
+                                                             : BikeCardState::Inactive;
   }
   c.nameFromPower = pwrConnected || !cscConfigured;
-  c.showPower = pwrConnected;
+  c.showPower = pwrConnected || trainerReady;
+  c.nameFromTrainer = trainerConfigured && !pwrConnected &&
+                      (trainerReady ? !cscConnected : (!cscConfigured && !pwrConfigured));
   return c;
 }
 

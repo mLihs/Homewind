@@ -21,6 +21,13 @@ namespace WebHelpers {
 void sendMaintenance503(AsyncWebServerRequest* request);
 
 /**
+ * @brief Require X-Homewind on POST (CSRF: custom header forces a CORS preflight)
+ *
+ * GETs pass. Missing header → 403 and false.
+ */
+bool requireHomewindHeader(AsyncWebServerRequest* request);
+
+/**
  * @brief Get string parameter from HTTP request
  * 
  * Checks query params first, then form params.

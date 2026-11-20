@@ -81,10 +81,10 @@ namespace MaintenanceMode {
   void setWifiResetHook(void (*hook)());
   void setFactoryResetHooks(bool (*clearSettings)(), bool (*clearWifi)());
 
-  /** Read and clear the RTC factory-reset report once at boot. */
+  /** Read the RTC factory-reset report at boot; cleared after the second boot (AP mode, then WiFi setup). */
   void captureBootReport();
 
-  /** Factory reset report from the previous boot (attempted, failedMask bit0 settings, bit1 WiFi). */
+  /** Factory reset report from the last reset (attempted, failedMask bit0 settings, bit1 WiFi, bit2 trainer table). */
   bool factoryResetReport(uint32_t& attempted, uint32_t& failedMask);
 
   /** Loop task, before BLERelayManager::loop() and the fan loop. */

@@ -27,6 +27,13 @@ extern DisplayManager* g_displayManager;
 
 #include <strings.h>
 
+// Sensor link events: always on in serial-command (diagnostic) builds.
+#if HW_ENABLE_SERIAL_COMMANDS
+#define BLE_LINK_PRINTF HW_ERROR_PRINTF
+#else
+#define BLE_LINK_PRINTF HW_DEBUG_PRINTF
+#endif
+
 // HR, CSC, power and one central: the core's sdkconfig.h allows 3 links, the
 // sketch folder's sdkconfig.h raises it and must come first on the include path.
 static_assert(CONFIG_BT_NIMBLE_MAX_CONNECTIONS >= 4, "Homewind/sdkconfig.h (4 BLE links) not in effect");
@@ -89,6 +96,7 @@ BLERelayManager::BLERelayManager()
   : initialized(false)
   , _maintenanceStopped(false)
   , _serverPaused(false)
+  , _pauseStartMs(0)
   , _connectedCount(0)
   , _lastDiscoveryCount(0)
 #if HOMEWIND_ENABLE_WEBSOCKET
@@ -123,6 +131,13 @@ BLERelayManager::BLERelayManager()
   _instance = this;
   memset(_configuredSensors, 0, sizeof(_configuredSensors));
   memset(_discovered, 0, sizeof(_discovered));
+#if HW_ENABLE_TRAINER_MIRROR
+  memset(&_trainer, 0, sizeof(_trainer));
+  _trainer.setup = kTrainerSetupIdle;
+  memset(&_trainerPending, 0, sizeof(_trainerPending));
+  _trainerSetupScan = false;
+  _trainerPowerNew = false;
+#endif
 }
 
 BLERelayManager::~BLERelayManager() {
@@ -150,15 +165,25 @@ bool BLERelayManager::begin() {
     HW_DEBUG_PRINTLN("[BLE] No sensor configuration found, starting fresh");
     _sensorCount = 0;
   }
+#if HW_ENABLE_TRAINER_MIRROR
+  loadTrainerFromNVS();
+  BikeSensor::setTrainerMirror(_trainer.enabled);
+#endif
   
   BikeSensor::setEventCallback(staticOnEvent);
   BikeSensor::setHeartRateCallback(staticOnHeartRate);
   BikeSensor::setCadenceCallback(staticOnCadence);
   BikeSensor::setPowerCallback(staticOnPower);
+#if HW_ENABLE_TRAINER_MIRROR
+  BikeSensor::setTrainerPowerCallback(staticOnTrainerPower);
+#endif
   if (!BikeSensor::begin("homewind", kAllTypes, BikeSensor::Mode::MAC)) {
     HW_ERROR_PRINTLN("[BLE] BikeSensor::begin() failed");
     return false;
   }
+#if HW_ENABLE_TRAINER_MIRROR && HW_ENABLE_SERIAL_COMMANDS
+  Serial.printf("[BLE] Trainer runtime in %s\n", BikeSensor::trainerInPsram() ? "PSRAM" : "internal RAM");
+#endif
   
   initialized = true;
   
@@ -215,21 +240,33 @@ void BLERelayManager::loop() {
   }
   const bool cadenceNew = _cadenceNew;
   _cadenceNew = false;
+#if HW_ENABLE_TRAINER_MIRROR
+  const bool trainerPowerNew = _trainerPowerNew;
+  _trainerPowerNew = false;
+#else
+  constexpr bool trainerPowerNew = false;
+#endif
 #if HW_ENABLE_FANS && HW_ENABLE_FAN_POWER_MODE
-  if (g_fanHrAdapter && (_powerNew || cadenceNew)) {
+  if (g_fanHrAdapter && (_powerNew || cadenceNew || trainerPowerNew)) {
     const uint32_t now = millis();
     uint32_t ageMs = 0;
     BikeSensor::PowerSample power{};
     if (_powerNew && BikeSensor::lastPower(power, ageMs)) {
       g_fanHrAdapter->onPowerSample(power.watts, now - ageMs);
     }
+#if HW_ENABLE_TRAINER_MIRROR
+    const bool trainerValid = trainerPowerNew && BikeSensor::trainerPower(power, ageMs);
+    if (hw::bikePowerFromTrainer(BikeSensor::connected(BikeSensor::SensorType::POWER), trainerValid)) {
+      g_fanHrAdapter->onPowerSample(power.watts, now - ageMs);
+    }
+#endif
     uint16_t rpm = 0;
     if (cadenceNew && BikeSensor::lastCadence(rpm, ageMs)) {
       g_fanHrAdapter->onCadenceSample(rpm, now - ageMs);
     }
   }
 #endif
-  if (_powerNew || cadenceNew || millis() - _bikeMetricsMs >= BIKE_METRICS_POLL_MS) {
+  if (_powerNew || cadenceNew || trainerPowerNew || millis() - _bikeMetricsMs >= BIKE_METRICS_POLL_MS) {
     _powerNew = false;
     updateBikeMetrics();
   }
@@ -256,23 +293,31 @@ void BLERelayManager::loop() {
   pause = _pauseDesired;
   _pauseDesired = -1;
   portEXIT_CRITICAL(&_bleMux);
-  if (pause == 1 && !_serverPaused) {
-    BikeSensor::pause();
-    _serverPaused = true;
-  } else if (pause == 0 && _serverPaused) {
+  // The WebUI pauses for a sensor search (15 s scan); a page that disappears during the
+  // search must not leave the relay paused until the next WebUI resumes it
+  static constexpr unsigned long kServerPauseMaxMs = 30000;
+  const bool pauseExpired = _serverPaused && millis() - _pauseStartMs >= kServerPauseMaxMs;
+  if (pause == 1) {
+    if (!_serverPaused) {
+      BikeSensor::pause();
+      _serverPaused = true;
+    }
+    _pauseStartMs = millis();
+  } else if ((pause == 0 || pauseExpired) && _serverPaused) {
     BikeSensor::resume();
     _serverPaused = false;
+    markSensorsDirty();   // changes seen while paused were not sent
   }
 
   if (_reconcileScheduled) {
     runReconcile(true);
   }
 
-  // Battery and link state for the snapshot.
+  // Battery and link state for the snapshot; sent only on a change (WebSocketTelemetry
+  // still refreshes it every 30 s, 120 s with two clients)
   const unsigned long now = millis();
   if (now - _lastSnapshotMs >= 1000) {
-    refreshSnapshot();
-    if (!_serverPaused) {
+    if (refreshSnapshot() && !_serverPaused) {
       markSensorsDirty();
     }
   }
@@ -368,10 +413,25 @@ BleEnqueueResult BLERelayManager::enqueueByName(hw::BleCmdKind kind, const char*
 BleEnqueueResult BLERelayManager::enqueueSetFromDiscovery(uint32_t generation, uint8_t index, bool force) {
   portENTER_CRITICAL(&_bleMux);
   const bool valid = generation == _discoveredGeneration && index < _discoveredCount;
+#if HW_ENABLE_TRAINER_MIRROR
+  const HwDiscoveredSensor rec = valid ? _discovered[index] : HwDiscoveredSensor{};
+  const uint8_t requestedMask = _discoveredMask;
+  const bool setupRunning = _trainer.setup == kTrainerSetupRunning;
+#endif
   portEXIT_CRITICAL(&_bleMux);
   if (!valid) {
     return BleEnqueueResult::STALE;
   }
+#if HW_ENABLE_TRAINER_MIRROR
+  if (setupRunning) {
+    return BleEnqueueResult::BUSY;
+  }
+  switch (sensorRule(rec, requestedMask)) {
+    case hw::BleDeviceRule::TOO_MANY: return BleEnqueueResult::TOO_MANY;
+    case hw::BleDeviceRule::TRAINER_MAC: return BleEnqueueResult::TRAINER_MAC;
+    default: break;
+  }
+#endif
   hw::BleCommand cmd;
   cmd.kind = hw::BleCmdKind::SET_FROM_DISCOVERY;
   cmd.set.generation = generation;
@@ -428,6 +488,96 @@ BleEnqueueResult BLERelayManager::requestServerPaused(bool paused) {
   return BleEnqueueResult::ACCEPTED;
 }
 
+#if HW_ENABLE_TRAINER_MIRROR
+BleEnqueueResult BLERelayManager::enqueueTrainerSetup(const char* mac, const char* name) {
+  hw::BleCommand cmd;
+  cmd.kind = hw::BleCmdKind::TRAINER_SETUP;
+  lowerMac(cmd.trainer.mac, mac);
+  copyStr(cmd.trainer.name, name, sizeof(cmd.trainer.name));
+  uint8_t removeMask;
+  const BleEnqueueResult check = trainerSetupCheck(cmd.trainer.mac, removeMask);
+  return check == BleEnqueueResult::ACCEPTED ? pushCommand(cmd) : check;
+}
+
+// The WebUI only has the index of DISCOVERY_RESULTS. trainer/status sends the
+// name unescaped: '"', '\' and control characters become '?'.
+BleEnqueueResult BLERelayManager::enqueueTrainerSetupFromDiscovery(uint32_t generation, uint8_t index) {
+  portENTER_CRITICAL(&_bleMux);
+  const bool valid = generation == _discoveredGeneration && index < _discoveredCount;
+  const HwDiscoveredSensor rec = valid ? _discovered[index] : HwDiscoveredSensor{};
+  portEXIT_CRITICAL(&_bleMux);
+  if (!valid) {
+    return BleEnqueueResult::STALE;
+  }
+  char mac[18];
+  formatMac(mac, rec.mac);
+  char name[sizeof(rec.name)];
+  copyStr(name, rec.name, sizeof(name));
+  for (char* c = name; *c; c++) {
+    if (*c == '"' || *c == '\\' || static_cast<unsigned char>(*c) < 0x20) *c = '?';
+  }
+  return enqueueTrainerSetup(mac, name);
+}
+
+BleEnqueueResult BLERelayManager::enqueueTrainerEnable(bool on) {
+  portENTER_CRITICAL(&_bleMux);
+  const bool known = _trainer.mac[0] != '\0';
+  portEXIT_CRITICAL(&_bleMux);
+  if (on && !known) {
+    return BleEnqueueResult::NO_TRAINER;
+  }
+  hw::BleCommand cmd;
+  cmd.kind = hw::BleCmdKind::TRAINER_ENABLE;
+  cmd.on = on;
+  return pushCommand(cmd);
+}
+
+BleEnqueueResult BLERelayManager::enqueueTrainerForget() {
+  hw::BleCommand cmd;
+  cmd.kind = hw::BleCmdKind::TRAINER_FORGET;
+  return pushCommand(cmd);
+}
+
+void BLERelayManager::trainerStatus(TrainerStatus& out) {
+  portENTER_CRITICAL(&_bleMux);
+  out = _trainer;
+  portEXIT_CRITICAL(&_bleMux);
+}
+
+void BLERelayManager::slotMacsLocked(const char* out[hw::kBleSlots]) const {
+  for (uint8_t slot = 0; slot < hw::kBleSlots; slot++) out[slot] = "";
+  for (uint8_t i = 0; i < _snapshotCount; i++) {
+    const int slot = hw::bleSlotOf(stringToTypeBit(_snapshot[i].type));
+    if (slot >= 0) out[slot] = _snapshot[i].mac;
+  }
+}
+
+hw::BleDeviceRule BLERelayManager::sensorRule(const HwDiscoveredSensor& rec, uint8_t requestedMask) {
+  char mac[18];
+  formatMac(mac, rec.mac);
+  const uint8_t type = hw::bleResolveDiscoveryType(rec.typeMask, requestedMask);
+  const char* slots[hw::kBleSlots];
+  portENTER_CRITICAL(&_bleMux);
+  slotMacsLocked(slots);
+  const hw::BleDeviceRule rule = hw::bleRuleForSensor(slots, _trainer.mac, type, mac);
+  portEXIT_CRITICAL(&_bleMux);
+  return rule;
+}
+
+// BUSY while a Homewind discovery or a setup is open, so the setup's
+// DISCOVERY_DONE cannot replace the WebUI's discovery snapshot.
+BleEnqueueResult BLERelayManager::trainerSetupCheck(const char* mac, uint8_t& removeMask) {
+  const char* slots[hw::kBleSlots];
+  portENTER_CRITICAL(&_bleMux);
+  const bool open = _discoveryActive || _discoveryOps.size() > 0 || _trainer.setup == kTrainerSetupRunning;
+  slotMacsLocked(slots);
+  const bool fits = hw::bleRuleForTrainer(slots, mac, removeMask) == hw::BleDeviceRule::OK;
+  portEXIT_CRITICAL(&_bleMux);
+  if (open) return BleEnqueueResult::BUSY;
+  return fits ? BleEnqueueResult::ACCEPTED : BleEnqueueResult::TOO_MANY;
+  }
+#endif
+  
 // =============================================================================
 // Loop task
 // =============================================================================
@@ -456,6 +606,12 @@ void BLERelayManager::setTargetsFromConfig() {
       HW_DEBUG_PRINTF("[BLE] Skipping sensor %s (%s) - no MAC address\n", cfg.name, cfg.type);
       continue;
     }
+#if HW_ENABLE_TRAINER_MIRROR
+    if (trainerHolds(cfg.mac)) {
+      HW_ERROR_PRINTF("[BLE] %s slot holds the trainer %s: not started\n", cfg.type, cfg.mac);
+      continue;
+    }
+#endif
     char mac[18];
     lowerMac(mac, cfg.mac);
     _reconciler.setTarget(type, cfg.name, mac, cfg.addrType, true, false);
@@ -484,6 +640,12 @@ void BLERelayManager::applySetFromDiscovery(uint32_t generation, uint8_t index, 
     HW_DEBUG_PRINTF("[BLE] setSensor: index %u has no HR/CSC/PWR type\n", index);
     return;
   }
+#if HW_ENABLE_TRAINER_MIRROR
+  if (_trainer.setup == kTrainerSetupRunning || sensorRule(rec, requestedMask) != hw::BleDeviceRule::OK) {
+    HW_DEBUG_PRINTF("[BLE] setSensor: index %u refused (trainer setup or device rule)\n", index);
+    return;
+  }
+#endif
 
   char mac[18];
   formatMac(mac, rec.mac);
@@ -522,13 +684,7 @@ void BLERelayManager::applyCommand(const hw::BleCommand& cmd) {
       const int i = findConfigByName(cmd.name);
       if (i < 0) break;
       HW_DEBUG_PRINTF("[BLE] deleteSensor: name=\"%s\"\n", cmd.name);
-      _reconciler.setTarget(_configuredSensors[i].typeBit, "", "", -1, false, true);
-      for (uint8_t j = i; j + 1 < _sensorCount; j++) {
-        _configuredSensors[j] = _configuredSensors[j + 1];
-      }
-      _sensorCount--;
-      saveConfigToNVS();
-      _reconcileScheduled = true;
+      deleteConfig(i);
       break;
     }
 
@@ -537,6 +693,9 @@ void BLERelayManager::applyCommand(const hw::BleCommand& cmd) {
       if (i < 0) break;
       const SensorConfig& cfg = _configuredSensors[i];
       if (cfg.mac[0] == '\0') break;
+#if HW_ENABLE_TRAINER_MIRROR
+      if (trainerHolds(cfg.mac)) break;
+#endif
       char mac[18];
       lowerMac(mac, cfg.mac);
       _reconciler.setTarget(cfg.typeBit, cfg.name, mac, cfg.addrType, true, false);
@@ -565,6 +724,30 @@ void BLERelayManager::applyCommand(const hw::BleCommand& cmd) {
       }
       setTargetsFromConfig();
       break;
+
+#if HW_ENABLE_TRAINER_MIRROR
+    case hw::BleCmdKind::TRAINER_SETUP:
+      applyTrainerSetup(cmd.trainer.mac, cmd.trainer.name);
+      break;
+
+    case hw::BleCmdKind::TRAINER_ENABLE:
+      saveTrainerToNVS(cmd.on && _trainer.mac[0] != '\0', nullptr);
+      if (_trainer.setup != kTrainerSetupRunning) setTrainerSetupResult(kTrainerSetupIdle);   // no stale "ok"
+      break;
+
+    case hw::BleCmdKind::TRAINER_FORGET: {
+      if (!BikeSensor::trainerForget()) {
+        HW_ERROR_PRINTLN("[BLE] trainerForget() failed");
+      }
+      const TrainerDev none = {};
+      saveTrainerToNVS(false, &none);
+      if (_trainer.setup != kTrainerSetupRunning) setTrainerSetupResult(kTrainerSetupIdle);
+      break;
+    }
+#else
+    default:
+      break;
+#endif
   }
   refreshSnapshot();
   markSensorsDirty();
@@ -573,6 +756,16 @@ void BLERelayManager::applyCommand(const hw::BleCommand& cmd) {
     notifyDisplay(hw::kBleTypeHR);
     notifyDisplay(hw::kBleTypeCSC);
   }
+}
+
+void BLERelayManager::deleteConfig(int i) {
+  _reconciler.setTarget(_configuredSensors[i].typeBit, "", "", -1, false, true);
+  for (uint8_t j = i; j + 1 < _sensorCount; j++) {
+    _configuredSensors[j] = _configuredSensors[j + 1];
+  }
+  _sensorCount--;
+  saveConfigToNVS();
+  _reconcileScheduled = true;
 }
 
 void BLERelayManager::processDiscoveryOps() {
@@ -628,6 +821,16 @@ void BLERelayManager::processEvents() {
       if (g_fanHrAdapter) g_fanHrAdapter->onHeartRateDisconnected(millis());
 #endif
     }
+#if HW_ENABLE_TRAINER_MIRROR
+    // A dropped TRAINER_SETUP_DONE would leave the result at running.
+    BikeSensor::TrainerInfo trainer;
+    BikeSensor::trainerInfo(trainer);
+    if (_trainer.setup == kTrainerSetupRunning && trainer.state != BikeSensor::TrainerState::SETUP) {
+      onTrainerSetupDone(static_cast<uint8_t>(BikeSensor::TrainerCheck::LINK_FAILED));
+    }
+    // Its DISCOVERY_DONE may be lost too: it must not swallow the next discovery's.
+    if (_trainer.setup != kTrainerSetupRunning) _trainerSetupScan = false;
+#endif
   }
 
   for (uint8_t n = 0; n < _eventCount; n++) {
@@ -638,7 +841,7 @@ void BLERelayManager::processEvents() {
 
     switch (type) {
       case BikeSensor::EventType::SENSOR_CONNECTED:
-        HW_DEBUG_PRINTF("[BLE] Sensor connected: %s\n", typeStr);
+        BLE_LINK_PRINTF("[BLE] Sensor connected: %s\n", typeStr);
         adoptSensorAddress(typeBit);
         refreshSnapshot();
         if (!_serverPaused) markSensorsDirty();
@@ -646,7 +849,7 @@ void BLERelayManager::processEvents() {
         break;
 
       case BikeSensor::EventType::SENSOR_DISCONNECTED:
-        HW_DEBUG_PRINTF("[BLE] Sensor disconnected: %s (reason=0x%02X: %s)\n", typeStr,
+        BLE_LINK_PRINTF("[BLE] Sensor disconnected: %s (reason=0x%02X: %s)\n", typeStr,
                         e.reason, BikeSensor::disconnectReasonString(e.reason));
         if (typeBit == hw::kBleTypeHR) {
           _hrValid = false;
@@ -665,7 +868,7 @@ void BLERelayManager::processEvents() {
 
       case BikeSensor::EventType::SENSOR_FAILED:
         // reason is 0 (hard fail) or a NimBLE host rc, not a disconnect reason.
-        HW_DEBUG_PRINTF("[BLE] Sensor connect failed: %s (rc=%d)\n", typeStr, e.reason);
+        BLE_LINK_PRINTF("[BLE] Sensor connect failed: %s (rc=%d)\n", typeStr, e.reason);
         break;
 
       case BikeSensor::EventType::SENSOR_FOUND:
@@ -675,6 +878,28 @@ void BLERelayManager::processEvents() {
       case BikeSensor::EventType::HOST_RESET:
         HW_ERROR_PRINTF("[BLE] NimBLE host reset (reason=%d)\n", e.reason);
         break;
+
+#if HW_ENABLE_TRAINER_MIRROR
+      case BikeSensor::EventType::TRAINER_CONNECTED:
+        if (e.reason == 1) {
+          HW_ERROR_PRINTLN("[BLE] Trainer GATT changed: not mirrored, run the trainer setup again");
+        } else {
+          HW_DEBUG_PRINTLN("[BLE] Trainer connected");
+        }
+        refreshSnapshot();
+        notifyDisplay(hw::kBleTypeCSC);
+        break;
+
+      case BikeSensor::EventType::TRAINER_DISCONNECTED:
+        HW_DEBUG_PRINTF("[BLE] Trainer disconnected (reason=0x%02X)\n", e.reason);
+        refreshSnapshot();
+        notifyDisplay(hw::kBleTypeCSC);
+        break;
+
+      case BikeSensor::EventType::TRAINER_SETUP_DONE:
+        onTrainerSetupDone(static_cast<uint8_t>(e.reason));
+        break;
+#endif
 
       default:
         break;
@@ -785,7 +1010,7 @@ void BLERelayManager::updateAdvertisedTypes() {
   _advertisedMask = mask;
 }
 
-void BLERelayManager::refreshSnapshot() {
+bool BLERelayManager::refreshSnapshot() {
   HwSensorInfo next[MAX_SENSORS];
   uint8_t count = 0;
   uint8_t connected = 0;
@@ -803,14 +1028,37 @@ void BLERelayManager::refreshSnapshot() {
     s.duplicate = _reconciler.duplicate(cfg.typeBit);
     if (s.connected) connected++;
   }
+#if HW_ENABLE_TRAINER_MIRROR
+  BikeSensor::TrainerInfo trainer;
+  BikeSensor::trainerInfo(trainer);
+#endif
   portENTER_CRITICAL(&_bleMux);
+  bool changed = count != _snapshotCount;
   for (uint8_t i = 0; i < count; i++) {
+    const HwSensorInfo& o = _snapshot[i];
+    const HwSensorInfo& s = next[i];
+    if (!changed && (o.connected != s.connected || o.battery != s.battery || o.duplicate != s.duplicate ||
+                     strcmp(o.name, s.name) != 0 || strcmp(o.type, s.type) != 0 || strcmp(o.mac, s.mac) != 0)) {
+      changed = true;
+    }
     _snapshot[i] = next[i];
   }
   _snapshotCount = count;
+#if HW_ENABLE_TRAINER_MIRROR
+  const bool trainerChanged = _trainer.mirror != trainer.mirror ||
+                              _trainer.appConnected != trainer.appConnected ||
+                              _trainer.state != static_cast<uint8_t>(trainer.state);
+  _trainer.mirror = trainer.mirror;
+  _trainer.appConnected = trainer.appConnected;
+  _trainer.state = static_cast<uint8_t>(trainer.state);
+#endif
   portEXIT_CRITICAL(&_bleMux);
+#if HW_ENABLE_TRAINER_MIRROR
+  if (trainerChanged) markTrainerDirty();
+#endif
   _connectedCount = connected;
   _lastSnapshotMs = millis();
+  return changed;
 }
 
 void BLERelayManager::markSensorsDirty() {
@@ -835,13 +1083,28 @@ void BLERelayManager::notifyDisplay(uint8_t typeBit) {
 #endif
 }
 
-// Power is valid while the meter is subscribed and has delivered; a value
-// older than hw::kBikeStaleMs is sent as 0 (BikeMetrics.h).
+// Power is valid while the meter (or, without a connected meter, the trainer)
+// is subscribed and has delivered; a value older than hw::kBikeStaleMs is sent
+// as 0 (BikeMetrics.h).
 void BLERelayManager::updateBikeMetrics() {
   _bikeMetricsMs = millis();
   BikeSensor::PowerSample power{};
   uint32_t powerAgeMs = 0;
+#if HW_ENABLE_TRAINER_MIRROR
+  bool powerValid = BikeSensor::lastPower(power, powerAgeMs);
+  BikeSensor::PowerSample trainerSample{};
+  uint32_t trainerAgeMs = 0;
+  const bool fromTrainer = hw::bikePowerFromTrainer(BikeSensor::connected(BikeSensor::SensorType::POWER),
+                                                    BikeSensor::trainerPower(trainerSample, trainerAgeMs));
+  if (fromTrainer) {
+    power = trainerSample;
+    powerAgeMs = trainerAgeMs;
+    powerValid = true;
+  }
+#else
   const bool powerValid = BikeSensor::lastPower(power, powerAgeMs);
+  constexpr bool fromTrainer = false;
+#endif
   uint16_t rpm = 0;
   uint32_t cadenceAgeMs = 0;
   const bool cadenceValid = BikeSensor::lastCadence(rpm, cadenceAgeMs);
@@ -849,7 +1112,8 @@ void BLERelayManager::updateBikeMetrics() {
   const bool fromPower = BikeSensor::info(BikeSensor::SensorType::POWER, info) && info.providesCadence;
 
   const hw::BikeMetrics next = hw::makeBikeMetrics(powerValid, power.watts, powerAgeMs,
-                                                   cadenceValid, rpm, cadenceAgeMs, fromPower);
+                                                   cadenceValid, rpm, cadenceAgeMs, fromPower,
+                                                   fromTrainer);
   if (next == _bikeMetrics) {
     return;
   }
@@ -918,6 +1182,12 @@ void BLERelayManager::staticOnEvent(const BikeSensor::EventInfo& e) {
   if (!self) return;
   if (e.type == BikeSensor::EventType::DATA) return;
   if (e.type == BikeSensor::EventType::DISCOVERY_DONE) {
+#if HW_ENABLE_TRAINER_MIRROR
+    if (self->_trainerSetupScan) {
+      self->_trainerSetupScan = false;
+      return;
+    }
+#endif
     if (self->_doneCount >= 2) {
       self->_done[0] = self->_done[1];
       self->_doneCount = 1;
@@ -958,6 +1228,141 @@ void BLERelayManager::staticOnPower(const BikeSensor::PowerSample&) {
   if (!self) return;
   self->_powerNew = true;
 }
+
+#if HW_ENABLE_TRAINER_MIRROR
+void BLERelayManager::staticOnTrainerPower(const BikeSensor::PowerSample&) {
+  BLERelayManager* self = _instance;
+  if (!self) return;
+  self->_trainerPowerNew = true;
+}
+
+void BLERelayManager::markTrainerDirty() {
+#if HOMEWIND_ENABLE_WEBSOCKET
+  if (_telemetry) {
+    _telemetry->markDirty(TelemetryFrameType::TRAINER_STATUS);
+  }
+#endif
+  }
+#endif
+
+#if HW_ENABLE_TRAINER_MIRROR
+// =============================================================================
+// Trainer mirror (loop task)
+// =============================================================================
+
+// D8 boot rule: with trn_on, a sensor slot holding the trainer's MAC stays off.
+bool BLERelayManager::trainerHolds(const char* mac) const {
+  return _trainer.enabled && _trainer.mac[0] != '\0' && strcasecmp(mac, _trainer.mac) == 0;
+}
+
+void BLERelayManager::setTrainerSetupResult(uint8_t result) {
+  portENTER_CRITICAL(&_bleMux);
+  _trainer.setup = result;
+  portEXIT_CRITICAL(&_bleMux);
+  markTrainerDirty();
+}
+
+void BLERelayManager::removeSlots(uint8_t typeMask) {
+  for (uint8_t slot = 0; slot < hw::kBleSlots; slot++) {
+    const uint8_t type = hw::bleTypeOfSlot(slot);
+    const int i = (typeMask & type) ? findConfigByType(type) : -1;
+    if (i < 0) continue;
+    HW_ERROR_PRINTF("[BLE] %s slot %s is the trainer: removed\n", _configuredSensors[i].type,
+                    _configuredSensors[i].mac);
+    deleteConfig(i);
+  }
+  runReconcile(false);
+  markSensorsDirty();   // also while paused: the open sensor dialog shows the removal
+}
+
+void BLERelayManager::applyTrainerSetup(const char* mac, const char* name) {
+  uint8_t removeMask = 0;
+  const BleEnqueueResult check = trainerSetupCheck(mac, removeMask);
+  if (check != BleEnqueueResult::ACCEPTED) {
+    HW_DEBUG_PRINTF("[BLE] Trainer setup %s refused (%s)\n", mac,
+                    check == BleEnqueueResult::BUSY ? "busy" : "device rule");
+    setTrainerSetupResult(check == BleEnqueueResult::BUSY ? kTrainerSetupBusy : kTrainerSetupRule);
+    return;
+  }
+  // The trainer stops advertising while a sensor slot holds its link (G2).
+  if (removeMask != 0) removeSlots(removeMask);
+  if (!BikeSensor::trainerSetup(mac)) {
+    HW_DEBUG_PRINTF("[BLE] trainerSetup(%s) refused\n", mac);
+    setTrainerSetupResult(kTrainerSetupBusy);
+    return;
+  }
+  copyStr(_trainerPending.mac, mac, sizeof(_trainerPending.mac));
+  copyStr(_trainerPending.name, name, sizeof(_trainerPending.name));
+  _trainerSetupScan = true;
+  setTrainerSetupResult(kTrainerSetupRunning);
+  HW_DEBUG_PRINTF("[BLE] Trainer setup %s (%s) started\n", mac, name);
+}
+
+// D6: setup OK turns the mirror on (after a restart).
+void BLERelayManager::onTrainerSetupDone(uint8_t check) {
+  HW_DEBUG_PRINTF("[BLE] Trainer setup %s done: check %u\n", _trainerPending.mac, check);
+  if (check == static_cast<uint8_t>(BikeSensor::TrainerCheck::OK) && MaintenanceMode::admissionClosed()) {
+    check = static_cast<uint8_t>(BikeSensor::TrainerCheck::STORE_FAILED);   // trn_on/trn_dev not stored
+  } else if (check == static_cast<uint8_t>(BikeSensor::TrainerCheck::OK)) {
+    uint8_t removeMask = 0;
+    trainerSetupCheck(_trainerPending.mac, removeMask);   // a slot set to the trainer during the setup
+    if (removeMask != 0) removeSlots(removeMask);
+    if (!saveTrainerToNVS(true, &_trainerPending)) {
+      check = static_cast<uint8_t>(BikeSensor::TrainerCheck::STORE_FAILED);
+    }
+  }
+  setTrainerSetupResult(check);
+}
+
+void BLERelayManager::loadTrainerFromNVS() {
+  TrainerDev dev = {};
+  bool on = false;
+  Preferences prefs;
+  if (prefs.begin(NVS_NAMESPACE, true)) {
+    on = prefs.getUChar(NVS_KEY_TRAINER_ON, 0) != 0;
+    if (prefs.getBytesLength(NVS_KEY_TRAINER_DEV) == sizeof(dev)) {
+      prefs.getBytes(NVS_KEY_TRAINER_DEV, &dev, sizeof(dev));
+    }
+    prefs.end();
+  }
+  dev.mac[sizeof(dev.mac) - 1] = '\0';
+  dev.name[sizeof(dev.name) - 1] = '\0';
+  portENTER_CRITICAL(&_bleMux);
+  _trainer.enabled = on;
+  memcpy(_trainer.mac, dev.mac, sizeof(dev.mac));
+  memcpy(_trainer.name, dev.name, sizeof(dev.name));
+  portEXIT_CRITICAL(&_bleMux);
+  HW_DEBUG_PRINTF("[BLE] [NVS] Trainer \"%s\" %s, mirror %s\n", dev.name, dev.mac, on ? "on" : "off");
+}
+
+// dev: nullptr keeps trn_dev; mac "" erases it.
+bool BLERelayManager::saveTrainerToNVS(bool on, const TrainerDev* dev) {
+  Preferences prefs;
+  bool ok = prefs.begin(NVS_NAMESPACE, false);
+  if (ok) {
+    ok = prefs.putUChar(NVS_KEY_TRAINER_ON, on ? 1 : 0) == 1;
+    if (dev && dev->mac[0] != '\0') {
+      ok = prefs.putBytes(NVS_KEY_TRAINER_DEV, dev, sizeof(*dev)) == sizeof(*dev) && ok;
+    } else if (dev) {
+      prefs.remove(NVS_KEY_TRAINER_DEV);
+    }
+    prefs.end();
+  }
+  if (!ok) {
+    HW_ERROR_PRINTLN("[BLE] [NVS] Failed to save the trainer");
+    return false;
+  }
+  portENTER_CRITICAL(&_bleMux);
+  _trainer.enabled = on;
+  if (dev) {
+    memcpy(_trainer.mac, dev->mac, sizeof(dev->mac));
+    memcpy(_trainer.name, dev->name, sizeof(dev->name));
+  }
+  portEXIT_CRITICAL(&_bleMux);
+  markTrainerDirty();
+  return true;
+}
+#endif
 
 // Internal helpers
 

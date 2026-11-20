@@ -35,12 +35,14 @@ struct FactoryResetReport {
   uint32_t magic;
   uint32_t attempted;
   uint32_t failedMask;
+  uint32_t bootsLeft;
 };
+constexpr uint32_t kReportBoots = 2;   // AP-mode boot after the reset + the boot after WiFi setup
 constexpr uint32_t kReportMagic = 0x48574652;   // "HWFR"
 constexpr uint32_t kRebootGraceMs = 250;
 
 RTC_NOINIT_ATTR FactoryResetReport s_rtcReport;
-FactoryResetReport s_bootReport = {0, 0, 0};
+FactoryResetReport s_bootReport = {0, 0, 0, 0};
 
 hw::MaintenanceLifecycle s_lc(kScansMs);
 
@@ -128,12 +130,18 @@ void runFactoryReset() {
   s_rtcReport.magic = kReportMagic;
   s_rtcReport.attempted = 1;
   s_rtcReport.failedMask = 0;
+  s_rtcReport.bootsLeft = kReportBoots;
   if (!s_clearSettings || !s_clearSettings()) {
     s_rtcReport.failedMask |= 1u;
   }
   if (s_clearWifi && !s_clearWifi()) {
     s_rtcReport.failedMask |= 2u;
   }
+#if HW_ENABLE_TRAINER_MIRROR
+  if (!BikeSensor::trainerForget()) {   // NVS bbs/trn_gatt; trn_on/trn_dev go with the settings
+    s_rtcReport.failedMask |= 4u;
+  }
+#endif
   HW_DEBUG_PRINTF("[MaintenanceMode] Factory reset erased (failedMask=0x%lx), rebooting\n",
                   static_cast<unsigned long>(s_rtcReport.failedMask));
 }
@@ -260,11 +268,13 @@ void setFactoryResetHooks(bool (*clearSettings)(), bool (*clearWifi)()) {
 void captureBootReport() {
   ackSem();
   s_lc.setSignal(giveAck);
-  if (s_rtcReport.magic == kReportMagic) {
+  if (s_rtcReport.magic == kReportMagic && s_rtcReport.bootsLeft >= 1 &&
+      s_rtcReport.bootsLeft <= kReportBoots) {
     s_bootReport = s_rtcReport;
     HW_DEBUG_PRINTF("[MaintenanceMode] Factory reset report: attempted=%lu failedMask=0x%lx\n",
                     static_cast<unsigned long>(s_bootReport.attempted),
                     static_cast<unsigned long>(s_bootReport.failedMask));
+    if (--s_rtcReport.bootsLeft > 0) return;
   }
   s_rtcReport.magic = 0;
   s_rtcReport.attempted = 0;

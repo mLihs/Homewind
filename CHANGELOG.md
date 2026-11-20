@@ -5,6 +5,70 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [2.0.0] - 2026-11-20
+
+Trainer mirror is on in every release build. Single-file WebUI, CSRF on action POSTs, and the WebUI polish from Unreleased.
+
+### Added
+
+- **Trainer mirror (GA):** every release build enables `HW_ENABLE_TRAINER_MIRROR` and `BBS_COMPILE_TRAINER` (`tools/build.sh`; Touch uses `BBS_TRAINER_PSRAM`). Relays a smart trainer to Zwift/Rouvy/MyWhoosh as a GATT mirror (`docs/TRAINER_PROXY_DESIGN.md`, `docs/AGENT_TRAINER_MIRROR.md`, website copy `Website/docs/WEBSITE_TRAINER_MIRROR.md`). Trainer firmware updates (DFU) are not mirrored on purpose — Pause Homewind first. Maintainer check 2026-11-20: Tacx NEO 2T + MyWhoosh connected immediately (power, HR, cadence, controllable, virtual steering).
+  - API `trainer/setup`, `trainer/enable`, `trainer/forget`, `trainer/status`; setup and enable take effect after a restart. Device rule: besides the heart-rate strap, at most two of cadence sensor, power meter and trainer (409).
+  - WebSocket frame `TRAINER_STATUS` (0x0F); `BIKE_METRICS` flag bit 3 = power from the trainer.
+  - WebUI: Trainer row in "Setup Sensors" (only when the firmware sends `TRAINER_STATUS`): pick the trainer from a power search (configured sensors are not listed; the sensor in the power slot is offered and moves to the trainer, D8), setup result (cleared by "Pause" and "Remove"), "Pause" / "Resume" (keeps the setup, frees the trainer e.g. for a firmware update), "Remove" (deletes the setup, with confirmation); after a successful setup, "Pause"/"Resume" or "Remove" Homewind restarts by itself unless an app is connected (then a Restart button); the other device rows are greyed out at the device rule.
+  - Power without a connected power meter comes from the trainer (D2): dashboard, Touch display, fans (Hybrid accepts the trainer as power source).
+  - Factory reset also erases the trainer table (`failed_mask` bit 2, named in the WebUI).
+  - Serial `s` (serial-command builds) shows the trainer counters; sensor connect/disconnect/failed are logged there without debug logs.
+- WebSocket frame `APP_STATUS` (0x10, all BLE builds): number of apps (BLE centrals) connected to Homewind, on the relay or the trainer mirror; sent on change and on connect. The WebUI no longer restarts by itself after a trainer change while any app is connected (before: only an app on the mirror was known).
+
+### Changed
+
+- WebUI "Setup Sensors": relay advertising is paused only while a sensor search runs, no longer the whole time the dialog is open, so apps keep finding Homewind; the open dialog now follows sensor connects live (it re-renders only when its content changes).
+- WebUI "Setup Sensors": new power meter icon (purple lightning bolt) and a trainer icon; a sensor's connection shows only in the icon colour (no Connected/Disconnected label; Duplicate stays); the trainer shows "Mirroring" and "App connected" as green badges (style of the WebSocket "Connected" indicator), otherwise "Mirror after restart" or "Paused". No icon in the dialog header; the notices are centred; an empty row reads "No … Sensor Added" (before "Connected") and says "All slots in use" when the device rule blocks it; the row buttons are 72 px wide; long sensor names without spaces wrap instead of running under the buttons.
+- WebUI sensor search: a progress bar over the 15 s scan (style of the firmware download) replaces the spinner; it waits at 95 % for the results.
+- WebUI trainer setup: after "Save" a "Reading Trainer" dialog with a progress bar follows the setup; on success it goes straight to the restart, with an app connected it offers "Later" / "Restart"; a failed setup shows the reason with "Return" / "Search again" (no result within 45 s: error).
+- WebUI main screen: the power & cadence card follows the new design (no outlined boxes, compact) with cadence on the left and power on the right; with a cadence sensor alone only cadence shows, and power is faded while its source is not connected.
+- WebUI is one file: the build inlines `app.css` and `app.js` into `index.html`, so a page load is one request instead of three (`/app.css` and `/app.js` are gone; the CSS-then-JS loader is no longer needed). Embedded 30.9 KB (before ~34.0 KB in three files): Terser runs with `passes=3` and `--toplevel`, `app.css` is minified with Lightning CSS 1.30.1 (before only comments removed) and the page is compressed with Zopfli (still gzip, ~5 % smaller; the build needs `brew install zopfli`). On the Touch one load costs 2–5 KB heap for ~0.2 s (before ~10 KB over three requests).
+- WebUI firmware download: while `FIRMWARE_PROGRESS` frames arrive, `firmware/status` is polled every 10 s instead of every 2.5 s.
+- WebUI keyboard: the HR range tiles and the fan art can be opened with Tab and Enter/Space; the dialog is labelled by its title for screen readers.
+
+### Fixed
+
+- Action POSTs require header `X-Homewind: 1` (CSRF; without it 403). The WebUI sends it; curl and other tools must too (`docs/05_APIS.md`).
+- WebUI: removing the last sensor refreshes "Setup Sensors" (before the empty snapshot left the old row).
+- WebUI: no WebSocket reconnect on tab focus / `online` while a firmware download runs (same as on close).
+- WebUI: after editing a fan token, blade and gradient ids follow the new token so the fan spins again.
+- WebUI: if the firmware search fails without a WebSocket result, the 75 s timeout reads `firmware/status` and shows its `error=` (before a generic timeout).
+- WebUI: a second client's search result no longer leaves "Update Firmware" stuck after "No Update Available".
+- WebUI: cancelling a firmware search no longer shows an error if the search POST fails afterwards.
+- WebUI: "Remove" on a sensor disables for the request (no double delete).
+- WebUI: removing the HR sensor clears the BPM display to `--`.
+- WebUI: WiFi Reset and Factory Reset ask for a second confirmation; label "WiFi Reset".
+- WebUI: fan token field accepts only hex (`0-9a-fA-F`), matching the firmware.
+- WebUI: a WebSocket that stays open but delivers no frame for 45 s (the firmware sends `SYSTEM_STATUS` every 30 s) is dropped; the indicator shows "Disconnected" and the page reconnects. Before, the values could freeze while the indicator still said "Connected" (seen once with a second client opening during a ride).
+- WebSocket: Nagle is back on for WebSocket connections (AsyncWebServer turns it off for every connection). Each small frame took its own TCP segment (~2 KB internal RAM until acked), so a `telemetry/refresh` with two WebUI clients cost up to ~43 KB at once (seen down to 312 B free on the XIAO with the trainer mirror); now ~2–12 KB. Live values may arrive up to ~0.2 s later.
+- WebUI: no `telemetry/refresh` at script start (before the WebSocket is open it only added a request to the page load; the refresh after the `CLIENT_ID` frame stays); `index.html` declares an empty icon, so browsers no longer request `/favicon.ico` (404).
+- WebUI fan cards: a `FANS_SNAPSHOT` with the same fans only updates their states; before, it rebuilt every card, which re-enabled a toggle in the middle of its request or 3 s cool-down.
+- `SENSORS_SNAPSHOT` is sent when a sensor's state changes (link, battery, duplicate, configuration), no longer every second; the periodic refresh (30 s, 120 s with two clients) stays. Measured on the Touch with one client: 62 → 2 frames per minute (10.6 KB → 0.3 KB).
+- Relay advertising pause (`sensor/server/pause`): ends on its own 30 s after the last pause request, so a page closed during a sensor search no longer leaves the relay paused; the WebUI no longer sends `sensor/server/resume` on every WebSocket open.
+- WebUI page load: `telemetry/refresh` only when no `FANS_SNAPSHOT` arrived within 1 s of `CLIENT_ID` (the first client gets the snapshots from the staged connect; before, they were sent twice). A cold load now makes no POST request (before 2).
+- WebUI: ETags are sent in quotes (RFC 9110).
+- WebUI: the page behind an open dialog is `inert` (no Tab/Enter into it, e.g. Reset during a firmware download); the waves pause while a dialog is open (they cost ~10 % of a core in the browser).
+- WebUI: on returning to the tab or when the network comes back, the WebSocket reconnects at once instead of after the pending backoff (up to 30 s); the "too many connections" message is in English and the rejected page sends no refresh.
+- WebUI: `index.html` declares `lang="en"` (the UI is English; before `de`).
+- WebUI fan art: blades and spokes are generated in JS instead of embedded (identical rendering); `app.js` −2.1 KB gzip.
+- WebUI firmware update: closing "Searching Update" or "Firmware Available" with X, Esc or the backdrop now aborts like Cancel; before, the "Update Firmware" button did nothing until a reload. A search without a result for 75 s ends with an error.
+- WebUI: after the Reset dialog, later dialogs no longer keep its stacked button layout.
+- WebUI HR card: the fan mode hint ("Running as Smart: …") under the cool-down bar has the same gap above as below (before 16 px above, 8 px below).
+- WebUI dialogs: the close X is drawn as an icon and sits exactly in the middle of its button (the "×" character sat off-centre depending on the font).
+- WebUI fan toggle: a failed request restores the position before the click (before it flipped the current position, which a `FANS_SNAPSHOT` may already have reset).
+- WebUI: removing a fan or a sensor and saving the HR range show an error when the device rejects it; the fan card stays and the HR value returns to the old one (before the UI showed the change anyway).
+- WebUI: a `HEART_RATE` frame is processed once (it wrote the value and called the fan animation callback twice).
+- WebUI fan animation: the frame loop stops when no fan spins or has a target (before it ran as long as a fan card existed, also at speed 0); heart rate, HR range, `FAN_CONTROL`, toggle and fan state changes start it again.
+- WebUI build (`tools/build_webui.py`): fails when Terser fails, instead of embedding `app.js` unminified (~31 KB more flash); Terser is pinned to 5.51.3, so a new Terser release no longer changes the output and the build hash.
+- Factory reset: the result (`maintenance/status` → `factory_reset`) is kept for two boots, so it is still there after the WiFi setup that follows the reset. Before, the reboot after the WiFi setup cleared it, although the reset dialog points there.
+
 ## [1.8.2] - 2026-11-15
 
 Two more Xiaomi fans: Smart Standing Fan Pro Slim and Smart Desktop Air Circulation Fan (SmartMiFanAsync 2.0.1).

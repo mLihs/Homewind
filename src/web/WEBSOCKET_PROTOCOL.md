@@ -140,7 +140,8 @@ Total: 5 bytes
   - bit 0: power valid. The power meter is subscribed and has sent data since it connected (BikeSensor `lastPower()`). Stays set while it is connected; without a packet for more than 3 s, `power_w` is 0.
   - bit 1: cadence valid. The cadence source has delivered (BikeSensor `lastCadence()`): the CSC sensor while it is subscribed, otherwise a subscribed power meter once it has sent crank data. `cadence_rpm` is 0 when the last crank event (power meter) or CSC packet is older than 3 s; a CSC sensor also reports 0 itself when the crank stops.
   - bit 2: cadence comes from the power meter (no CSC sensor is subscribed). Can be set while bit 1 is clear (power meter without crank data yet).
-  - bits 3–7: reserved, 0
+  - bit 3 (trainer firmware, `--trainer`): `power_w` is the trainer's (Cycling Power read along by the trainer mirror). Set with bit 0 while no power meter is connected (D2 in `docs/TRAINER_PROXY_DESIGN.md` §3: power meter first, then the trainer); a connected power meter without a sample yet leaves bit 0 clear instead. Cadence keeps BikeSensor's order (CSC sensor, power meter, trainer) without its own flag. Clients that ignore bit 3 show the trainer's power as power.
+  - bits 4–7: reserved, 0
 
 Sent when the encoded value changes (new power or cadence sample, or a validity change, checked at least once per second), coalesced by the dirty flag like `HEART_RATE`. Sent once per client after connect (staged connect of the first client, and with the unicast snapshots requested by `telemetry/refresh?client_id=`). In the release firmware, fan control uses heart rate only; see `FAN_CONTROL` for the Smart/Hybrid test firmware.
 
@@ -164,6 +165,42 @@ Total: 10 bytes
 - `cooldown`: stored cool-down, signed −2..+2 (0 = default); sets the fall rate in Smart and Hybrid to 30 / 25 / 20 / 15 / 10 % of full scale per minute
 
 Sent when the status changes, at most once per 3 s (a mode, FTP or cool-down change at once), on client connect and on `telemetry/refresh`. Before fan control runs (fans and BLE still starting), only `mode`, `effective` = `mode`, `ftp_w` and `cooldown` are set; receiving the frame at all means the firmware supports the fan modes. The WebUI shows the mode selector and FTP in the heart rate card from the first frame on and animates the fans from `target_on`/`target_pct`; without the frame it keeps the client-side Pure curve.
+
+#### TRAINER_STATUS (0x0F) - Trainer Mirror Status (trainer firmware only)
+
+Only in firmware built with `HW_ENABLE_TRAINER_MIRROR=1` (`tools/build.sh --trainer`); design `docs/TRAINER_PROXY_DESIGN.md`, spec `docs/AGENT_TRAINER_MIRROR.md` Task 4. Same data as `GET /api/v1/action/trainer/status`.
+
+**Payload:**
+```
+[state:uint8][flags:uint8][setup:uint8][name_len:uint8][name:bytes]
+```
+Total: 4 + name_len bytes (name ≤ 31 bytes)
+
+- `state`: BikeSensor `TrainerState`: 0 = off, 1 = waiting, 2 = connecting, 3 = discovering, 4 = ready, 5 = changed (GATT changed, not mirrored), 6 = setup
+- `flags`:
+  - bit 0: an app is connected to the mirror
+  - bit 1: mirror: this boot mirrors the trainer
+  - bit 2: enabled: NVS `trn_on`, the mirror runs after the next restart
+  - bit 3: set up: a trainer is stored (NVS `trn_dev`; also a released one, which still counts for the device rule)
+  - bits 4–7: reserved, 0
+- `setup`: result of the last trainer setup this boot: 0..8 = BikeSensor `TrainerCheck` (0 ok, 1 not found, 2 link failed, 3 too large, 4 empty, 5 empty service, 6 no CCCD, 7 missing advertised, 8 store failed), 0xFE = running, 0xFD = busy, 0xFC = device rule, 0xFF = idle (none; also after enable/forget)
+- `name`: stored trainer name (UTF-8, may be empty)
+
+Sent when the status changes (setup start and result, enable/forget, link or app changes, checked at least once per second), once per client after connect (staged connect and the unicast snapshots of `telemetry/refresh?client_id=`) and on `telemetry/refresh`. Receiving the frame at all means the firmware supports the trainer mirror: the WebUI shows the Trainer row in "Setup Sensors" only then.
+
+#### APP_STATUS (0x10) - Connected Apps
+
+In every firmware with BLE (`HW_ENABLE_BLE`), not only trainer builds.
+
+**Payload:**
+```
+[apps:uint8]
+```
+Total: 1 byte
+
+- `apps`: number of apps (BLE centrals, e.g. Zwift) connected to Homewind, to the plain relay or to the trainer mirror (BikeSensor `centralCount()`)
+
+Polled in every `loopFlush()` (main loop task) while a WebSocket client is connected; sent when the number changes, on WebSocket client connect and with the unicast snapshots of `telemetry/refresh?client_id=`. Not sent before the BLE relay is ready. The WebUI skips its automatic restart after a trainer change while `apps > 0`; without this frame (older firmware) it falls back to bit 0 of `TRAINER_STATUS`.
 
 #### DISCOVERY_STATUS (0x04) - Discovery State Change
 

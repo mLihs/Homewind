@@ -76,15 +76,56 @@ inline bool bleAddressValid(const char* mac, int8_t addrType) {
 }
 
 // ---------------------------------------------------------------------------
+// Device rule (TRAINER_PROXY_DESIGN § 4, D8): besides HR at most two of
+// trainer, CSC sensor and power meter; no sensor slot holds the trainer.
+// slotMac: the configured MAC per slot, "" = empty; trainerMac "" = none.
+// ---------------------------------------------------------------------------
+enum class BleDeviceRule : uint8_t { OK, TOO_MANY, TRAINER_MAC };
+
+// typeBit's slot gets mac (replacing that slot's sensor).
+inline BleDeviceRule bleRuleForSensor(const char* const slotMac[kBleSlots], const char* trainerMac,
+                                      uint8_t typeBit, const char* mac) {
+  const bool trainer = trainerMac[0] != '\0';
+  if (trainer && strcasecmp(mac, trainerMac) == 0) return BleDeviceRule::TRAINER_MAC;
+  if (typeBit == kBleTypeHR) return BleDeviceRule::OK;
+  uint8_t devices = trainer ? 1 : 0;
+  for (uint8_t i = 1; i < kBleSlots; ++i) {
+    if (bleTypeOfSlot(i) == typeBit || slotMac[i][0] != '\0') devices++;
+  }
+  return devices > 2 ? BleDeviceRule::TOO_MANY : BleDeviceRule::OK;
+}
+
+// Setup of the trainer at mac: removeMask gets the slots holding mac (removed
+// before the setup); the other devices must leave room for the trainer.
+inline BleDeviceRule bleRuleForTrainer(const char* const slotMac[kBleSlots], const char* mac,
+                                       uint8_t& removeMask) {
+  removeMask = 0;
+  uint8_t devices = 1;
+  for (uint8_t i = 0; i < kBleSlots; ++i) {
+    if (slotMac[i][0] == '\0') continue;
+    if (strcasecmp(slotMac[i], mac) == 0) {
+      removeMask |= bleTypeOfSlot(i);
+    } else if (i != 0) {
+      devices++;
+    }
+  }
+  return devices > 2 ? BleDeviceRule::TOO_MANY : BleDeviceRule::OK;
+}
+
+// ---------------------------------------------------------------------------
 // Sensor command queue (tagged union, capacity 8)
 // ---------------------------------------------------------------------------
-enum class BleCmdKind : uint8_t { SET_FROM_DISCOVERY, DELETE, CONNECT, DISCONNECT, RELOAD };
+enum class BleCmdKind : uint8_t {
+  SET_FROM_DISCOVERY, DELETE, CONNECT, DISCONNECT, RELOAD, TRAINER_SETUP, TRAINER_ENABLE, TRAINER_FORGET
+};
 
 struct BleCommand {
   BleCmdKind kind;
   union {
     struct { uint32_t generation; uint8_t index; bool force; } set;
     char name[64];   // DELETE / CONNECT / DISCONNECT
+    struct { char mac[18]; char name[32]; } trainer;   // TRAINER_SETUP
+    bool on;         // TRAINER_ENABLE
   };
 };
 

@@ -59,8 +59,9 @@ Diese Seite beschreibt den **Datenfluss vom und zum UI** für die zentralen Funk
 ### UI → Backend
 
 Die **Anzahl** der Lüfter wird nicht per HTTP gesetzt. Sie ergibt sich aus:
-- **Fan hinzufügen:** `POST /api/v1/action/fan/add?token=<32-hex>` → `handleFanAdd`
+- **Fan hinzufügen:** `POST /api/v1/action/fan/add?token=<32-hex>` → `handleFanAdd` (WebUI oder externes Tool, z. B. Token Extractor per Knopf — siehe [05_APIS.md](./05_APIS.md) „Adding a fan from the Token Extractor“)
 - **Fan entfernen:** `POST /api/v1/action/fan/remove?token=…` → `handleFanRemove`
+- Header `X-Homewind: 1` ist Pflicht (sonst 403)
 
 Die UI begrenzt die Anzeige/Logik mit `MAX_FANS` (z. B. 4) und nutzt `fanManager.getFanCount()` (= Anzahl `.fan-card`-Elemente), die aus dem letzten `FANS_SNAPSHOT` stammt.
 

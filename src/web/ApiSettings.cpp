@@ -39,6 +39,10 @@ static void settingsMaintenanceGateWrapper(AsyncWebServerRequest* request, void 
   if (!request || !handler) {
     return;
   }
+
+  if (!WebHelpers::requireHomewindHeader(request)) {
+    return;
+  }
   
   // If maintenance not active, allow request
   if (!MaintenanceMode::isActive()) {

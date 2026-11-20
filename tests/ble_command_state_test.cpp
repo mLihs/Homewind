@@ -401,6 +401,61 @@ static void testInvalidAddressNeverReachesLibrary() {
   CHECK(!r.pending());
 }
 
+// TRAINER_PROXY_DESIGN § 4, D8.
+static void testDeviceRule() {
+  const char* kNeo = "d4:89:88:6d:15:38";
+  const char* empty[kBleSlots] = {"", "", ""};
+  const char* hrCsc[kBleSlots] = {kMacA, kMacB, ""};
+  const char* cscPwr[kBleSlots] = {"", kMacA, kMacB};
+  const char* neoPwr[kBleSlots] = {kMacA, "", "D4:89:88:6D:15:38"};
+  // No trainer: HR + CSC + power meter as before.
+  CHECK(bleRuleForSensor(cscPwr, "", kBleTypeHR, kNeo) == BleDeviceRule::OK);
+  CHECK(bleRuleForSensor(cscPwr, "", kBleTypePWR, kNeo) == BleDeviceRule::OK);   // replaces
+  // Trainer: one more device besides HR, never a third; HR always.
+  CHECK(bleRuleForSensor(empty, kNeo, kBleTypePWR, kMacB) == BleDeviceRule::OK);
+  CHECK(bleRuleForSensor(hrCsc, kNeo, kBleTypeCSC, "aa:bb:cc:dd:ee:03") == BleDeviceRule::OK);
+  CHECK(bleRuleForSensor(hrCsc, kNeo, kBleTypePWR, "aa:bb:cc:dd:ee:03") == BleDeviceRule::TOO_MANY);
+  CHECK(bleRuleForSensor(hrCsc, kNeo, kBleTypeHR, "aa:bb:cc:dd:ee:03") == BleDeviceRule::OK);
+  // The trainer's MAC (any case) is never a sensor.
+  CHECK(bleRuleForSensor(empty, kNeo, kBleTypePWR, "D4:89:88:6D:15:38") == BleDeviceRule::TRAINER_MAC);
+  CHECK(bleRuleForSensor(empty, kNeo, kBleTypeHR, kNeo) == BleDeviceRule::TRAINER_MAC);
+
+  uint8_t remove = 0xFF;
+  CHECK(bleRuleForTrainer(empty, kNeo, remove) == BleDeviceRule::OK && remove == 0);
+  CHECK(bleRuleForTrainer(hrCsc, kNeo, remove) == BleDeviceRule::OK && remove == 0);
+  CHECK(bleRuleForTrainer(cscPwr, kNeo, remove) == BleDeviceRule::TOO_MANY && remove == 0);
+  // The NEO in the power slot: removed, so it leaves room.
+  CHECK(bleRuleForTrainer(neoPwr, kNeo, remove) == BleDeviceRule::OK && remove == kBleTypePWR);
+  const char* cscNeo[kBleSlots] = {"", kMacB, kNeo};
+  CHECK(bleRuleForTrainer(cscNeo, kNeo, remove) == BleDeviceRule::OK && remove == kBleTypePWR);
+  // The trainer's MAC in the HR slot: not a device besides HR; setup removes it.
+  const char* neoHr[kBleSlots] = {kNeo, "", ""};
+  CHECK(bleRuleForSensor(neoHr, kNeo, kBleTypePWR, kMacB) == BleDeviceRule::OK);
+  const char* neoHrCsc[kBleSlots] = {kNeo, kMacA, ""};
+  CHECK(bleRuleForSensor(neoHrCsc, kNeo, kBleTypePWR, kMacB) == BleDeviceRule::TOO_MANY);
+  CHECK(bleRuleForTrainer(neoHr, kNeo, remove) == BleDeviceRule::OK && remove == kBleTypeHR);
+  // The trainer in the CSC slot plus a power meter: CSC removed, two devices remain.
+  const char* neoCscPwr[kBleSlots] = {"", kNeo, kMacB};
+  CHECK(bleRuleForTrainer(neoCscPwr, kNeo, remove) == BleDeviceRule::OK && remove == kBleTypeCSC);
+}
+
+static void testTrainerCommands() {
+  BleCommandQueue q;
+  BleCommand c = {};
+  c.kind = BleCmdKind::TRAINER_SETUP;
+  strcpy(c.trainer.mac, "d4:89:88:6d:15:38");
+  strcpy(c.trainer.name, "Tacx Neo 2T");
+  CHECK(q.push(c));
+  c = {};
+  c.kind = BleCmdKind::TRAINER_ENABLE;
+  c.on = true;
+  CHECK(q.push(c));
+  BleCommand out = {};
+  CHECK(q.pop(out) && out.kind == BleCmdKind::TRAINER_SETUP && strcmp(out.trainer.name, "Tacx Neo 2T") == 0 &&
+        strcmp(out.trainer.mac, "d4:89:88:6d:15:38") == 0);
+  CHECK(q.pop(out) && out.kind == BleCmdKind::TRAINER_ENABLE && out.on);
+}
+
 int main() {
   testInvalidAddressNeverReachesLibrary();
   testRestoreDuplicate();
@@ -419,6 +474,8 @@ int main() {
   testAdvertisedTypes();
   testCommandQueue();
   testDiscoveryQueue();
+  testDeviceRule();
+  testTrainerCommands();
   if (g_failures) {
     std::printf("ble_command_state_test: %d failure(s)\n", g_failures);
     return EXIT_FAILURE;

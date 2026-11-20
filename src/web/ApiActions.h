@@ -58,6 +58,12 @@ private:
 #if HW_ENABLE_FAN_POWER_MODE
   static void handleFanModeSet(AsyncWebServerRequest* request);
 #endif
+#if HW_ENABLE_TRAINER_MIRROR
+  static void handleTrainerSetup(AsyncWebServerRequest* request);
+  static void handleTrainerEnable(AsyncWebServerRequest* request);
+  static void handleTrainerForget(AsyncWebServerRequest* request);
+  static void handleTrainerStatus(AsyncWebServerRequest* request);
+#endif
   static void handleTelemetryRefresh(AsyncWebServerRequest* request);
   static void sendResponse(AsyncWebServerRequest* request, int code, const char* message = nullptr);
   static void sendJSON(AsyncWebServerRequest* request, int code, const char* json);

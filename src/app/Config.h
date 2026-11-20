@@ -93,6 +93,16 @@
 #error "HW_ENABLE_FAN_POWER_MODE requires HW_ENABLE_FANS, HW_ENABLE_BLE and HW_ENABLE_NVS"
 #endif
 
+// BLE trainer mirror (docs/AGENT_TRAINER_MIRROR.md). From 2.0 release builds
+// enable it in build_opt.h together with BBS_COMPILE_TRAINER (all translation
+// units). Depends on: HW_ENABLE_BLE, HW_ENABLE_NVS
+#ifndef HW_ENABLE_TRAINER_MIRROR
+#define HW_ENABLE_TRAINER_MIRROR 1
+#endif
+#if HW_ENABLE_TRAINER_MIRROR && !(HW_ENABLE_BLE && HW_ENABLE_NVS)
+#error "HW_ENABLE_TRAINER_MIRROR requires HW_ENABLE_BLE and HW_ENABLE_NVS"
+#endif
+
 // OTA Update support (optional, starts after PH_RUNNING)
 #ifndef HW_ENABLE_OTA
 #define HW_ENABLE_OTA 1

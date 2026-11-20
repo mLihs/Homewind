@@ -36,6 +36,7 @@ This documentation provides comprehensive information about the Homewind ESP32 W
 
 ### 📝 Status & Future
 - **[08_OPEN_TOPICS.md](./08_OPEN_TOPICS.md)** – TODOs, known issues, planned features, open questions
+- **Website copy (Trainer mirror):** `Website/docs/WEBSITE_TRAINER_MIRROR.md` (EN/DE Setup, FAQ, UI error texts — publish when Trainer GA)
 
 ### 🔧 Troubleshooting
 - **[BOOT_LOOP_8MB_FLASH.md](./BOOT_LOOP_8MB_FLASH.md)** – Boot loop on 8MB flash boards (XIAO ESP32-S3)
