@@ -30,7 +30,7 @@ That is the whole install. Setup continues on your phone in the browser; later u
 1. Get a supported Xiaomi fan and one of the two boards below.
 2. Flash from [homewind.io](https://homewind.io) in Chrome or Edge (see above) — USB in, click Flash, done.
 3. Connect to the `Homewind` Wi-Fi, choose your 2.4 GHz network and follow the setup page.
-4. Read your fan's token with the [Xiaomi Cloud Token Extractor](https://github.com/mLihs/GUI-Miio-Tokenextrator-All-Plattforms/releases) (desktop app for macOS, Windows and Linux; log in with your Xiaomi account or by QR code) and paste the 32-character token into the **Fans** section.
+4. Add your fan with the [Homewind Token Extractor](https://github.com/mLihs/homewind-tokenextractor) (desktop app for macOS, Windows and Linux). Sign in with your Xiaomi Home account (email and password, or QR code from the Xiaomi Home app). The list shows only fans Homewind can control. Click **Add to Homewind** to send the fan to a Homewind on your network, or **Copy token** and paste the 32-character token into the **Fans** section.
 5. Optional: add your Bluetooth sensors in the **BLE** section; for Hybrid, set FTP and cool-down under fan mode.
 
 Full guide: [homewind.io/setup](https://homewind.io/setup/) · German: [homewind.io/de/anleitung](https://homewind.io/de/anleitung/)
@@ -300,7 +300,7 @@ Run `tools/build_webui.py` after changing anything in `webui_src/`. The script e
 
 | Project | What it is |
 | --- | --- |
-| [Xiaomi Cloud Token Extractor](https://github.com/mLihs/GUI-Miio-Tokenextrator-All-Plattforms) | Desktop GUI to read Xiaomi device tokens. Paste into the WebUI, or POST to `fan/add` (header `X-Homewind: 1`) — see [docs/05_APIS.md](docs/05_APIS.md#adding-a-fan-from-the-token-extractor-or-any-external-tool) |
+| [Homewind Token Extractor](https://github.com/mLihs/homewind-tokenextractor) | Desktop app (macOS, Windows, Linux) that lists fans Homewind can control. **Add to Homewind** sends the fan to a device on your network; **Copy token** is for adding it by hand in the web UI. |
 | [BluetoothBikeSensorServer](https://github.com/mLihs/BluetoothBikeSensorServer) | BLE sensor relay used by Homewind |
 | [SmartMiFanAsync](https://github.com/mLihs/SmartMiFanAsync) | Fan control library used by Homewind |
 | [Homewind on MakerWorld](https://makerworld.com/en/@hires2k/) | Housing and stand to print |
