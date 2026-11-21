@@ -144,7 +144,7 @@ Homewind libraries (by the author):
 
 | Library | Version | Purpose |
 | --- | --- | --- |
-| [BluetoothBikeSensorServer](https://github.com/mLihs/BluetoothBikeSensorServer) | 3.3.0 (required: ≥ 3.3.0, API `BikeSensor.h`) | Relays heart rate, speed/cadence and power from BLE sensors to a local GATT server |
+| [BluetoothBikeSensorServer](https://github.com/mLihs/BluetoothBikeSensorServer) | 3.3.3 (required: ≥ 3.3.3, API `BikeSensor.h`) | Relays heart rate, speed/cadence and power from BLE sensors to a local GATT server |
 | [SmartMiFanAsync](https://github.com/mLihs/SmartMiFanAsync) | 2.0.1 (required: ≥ 2.0.1) | Non-blocking Xiaomi / Smartmi fan control over miIO |
 | [GitFirmwareUpdate](https://github.com/mLihs/GitFirmwareUpdate) | 1.0.4 | OTA firmware updates |
 | [wifiMangerLite](https://github.com/mLihs/wifiMangerLite) | 3.1.0 (required: ≥ 3.1.0) | Wi-Fi setup via captive portal, NVS storage |
