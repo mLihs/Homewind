@@ -1,7 +1,12 @@
-# Homewind
+<a href="https://homewind.io"><img src="docs/media/homewind-header.jpg" alt="Homewind – Heart rate in · Wind out" width="100%"></a>
 
-[![License](https://img.shields.io/badge/license-PU%2BCU-blue.svg)](LICENSE)
-[![Website](https://img.shields.io/badge/web-homewind.io-f00f66.svg)](https://homewind.io)
+<p align="center">
+  <a href="https://homewind.io"><img src="https://img.shields.io/badge/homewind.io-F00F66?style=for-the-badge&labelColor=0F3D3A" alt="Website homewind.io"></a>
+  <a href="https://github.com/mLihs/Homewind/tags"><img src="https://img.shields.io/github/v/tag/mLihs/Homewind?sort=semver&style=for-the-badge&label=release&color=FFD12E&labelColor=0F3D3A" alt="Latest release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-PU%2BCU-BFF5DC?style=for-the-badge&labelColor=0F3D3A" alt="License PU+CU"></a>
+</p>
+
+# Homewind
 
 **Homewind is free ESP32 firmware that sets your Xiaomi Smart Fan's speed from your heart rate (and optionally power) and links your sensors to Zwift and Rouvy on Apple TV.**
 
@@ -15,7 +20,8 @@ You do **not** need the Arduino IDE, PlatformIO, or any firmware experience. On 
 
 That is the whole install. Setup continues on your phone in the browser; later updates can go over the air from the web UI.
 
-→ **Website, setup guide and one-click install: [homewind.io](https://homewind.io)** · German: [homewind.io/de](https://homewind.io/de/)
+> [!TIP]
+> **Website, setup guide and one-click install: [homewind.io](https://homewind.io)** · German: [homewind.io/de](https://homewind.io/de/)
 
 <!-- Demo GIF: rider pedals, heart rate rises, fan speeds up. Replace the path once the clip exists. -->
 <!-- ![Homewind demo](docs/media/homewind-demo.gif) -->
