@@ -41,8 +41,10 @@ extern FanModeSettings* g_fanModeSettings;
 #include <HomeWindWSAmoled.h>
 
 static_assert(HOMEWIND_WS_AMOLED_VERSION_MAJOR > 1 ||
-                  (HOMEWIND_WS_AMOLED_VERSION_MAJOR == 1 && HOMEWIND_WS_AMOLED_VERSION_MINOR >= 7),
-              "HomeWindWSAmoled >= 1.7.0 required (rows, badges, fan control)");
+                  (HOMEWIND_WS_AMOLED_VERSION_MAJOR == 1 &&
+                   (HOMEWIND_WS_AMOLED_VERSION_MINOR > 7 ||
+                    (HOMEWIND_WS_AMOLED_VERSION_MINOR == 7 && HOMEWIND_WS_AMOLED_VERSION_PATCH >= 1))),
+              "HomeWindWSAmoled >= 1.7.1 required (rows, badges, fan control, locked init)");
 
 namespace {
 constexpr uint32_t kPollMs = 500;   // badges, trainer, fan control

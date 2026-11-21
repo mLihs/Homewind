@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.1] - 2026-11-21
+
+### Fixed
+
+- **Touch:** HomeWindWSAmoled 1.7.1 builds the screens at boot under the LVGL lock; before, the display task could draw while the screens were still being created. Requires HomeWindWSAmoled >= 1.7.1. The Basic firmware is unchanged.
+
 ## [2.1.0] - 2026-11-21
 
 Touch display redesign (HomeWindWSAmoled 1.7.0).
