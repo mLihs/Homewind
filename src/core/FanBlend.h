@@ -126,8 +126,14 @@ class FanBlend {
     _updateValid = false;  // the next update() starts from the seed, not from an old timestamp
   }
 
+  // The rider moved the HR range (touch plus/minus, web UI): the next update()
+  // follows the curve at once instead of falling at the cool-down rate.
+  void releaseHold() { _releaseHold = true; }
+
   FanBlendOutput update(uint32_t nowMs, const FanBlendInput& in) {
     FanBlendOutput out;
+    const bool release = _releaseHold;
+    _releaseHold = false;
     const uint32_t dtMs = _updateValid ? elapsed(nowMs, _updateMs) : 0;
     _updateMs = nowMs;
     _updateValid = true;
@@ -173,7 +179,10 @@ class FanBlend {
     }
     const float sRaw = sHr > sPw ? sHr : sPw;
     float s = sRaw;
-    if (sRaw >= _sPrev) {
+    if (release) {
+      _maxPw = 0.0f;
+    }
+    if (sRaw >= _sPrev || release) {
       out.dominant = sRaw == sHr ? FanDominant::Hr : FanDominant::Power;
     } else {
       const float floor = _sPrev - fanFallRatePerMin(in.cooldown) * static_cast<float>(dtMs) / 60000.0f;
@@ -265,6 +274,7 @@ class FanBlend {
   bool _on = false;
   bool _failsafe = false;
   bool _holding = false;  // Hold that power had reached; see onPowerSample()
+  bool _releaseHold = false;
   float _maxPw = 0.0f;    // peak s_pw outside Hold; ages at FALL_RATE
 };
 

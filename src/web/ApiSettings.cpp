@@ -16,6 +16,10 @@
 #include "WebHelpers.h"
 #include <string.h>
 
+#if HW_ENABLE_DISPLAY
+#include "../core/DisplayManager.h"
+#endif
+
 #if HW_ENABLE_WEB
 
 SettingsStore* ApiSettings::s_settingsStore = nullptr;
@@ -43,6 +47,11 @@ static void settingsMaintenanceGateWrapper(AsyncWebServerRequest* request, void 
   if (!WebHelpers::requireHomewindHeader(request)) {
     return;
   }
+#if HW_ENABLE_DISPLAY
+  if (request->method() == HTTP_POST && g_displayManager) {
+    g_displayManager->noteUserActivity();
+  }
+#endif
   
   // If maintenance not active, allow request
   if (!MaintenanceMode::isActive()) {

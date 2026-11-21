@@ -227,9 +227,14 @@ public:
 
 **Status**: ✅ **Implemented** – Integrated with HomeWindWSAmoled library (compile-time: `HW_ENABLE_DISPLAY`)
 
-**Purpose**: Bridges Homewind data (HR, CSC, Fans, URL) to the AMOLED display. Uses deferred dirty-flag pattern for safe cross-task LVGL updates.
+**Purpose**: Bridges Homewind data (HR, power, cadence, badges, fan control, fans, URL) to the AMOLED display. Uses deferred dirty-flag pattern for safe cross-task LVGL updates. Requires HomeWindWSAmoled ≥ 1.7.0.
 
 **Architecture**: All `homewind_set_*` (LVGL) calls are centralized in `DisplayManager::loop()` under `lcd_lvgl_lock()`. BLE/Fan callbacks only set dirty flags and cache values – no direct LVGL calls from NimBLE or Arduino tasks.
+
+- **Rows** (`src/core/BikeCard.h`): power row from the power meter, else the trainer; cadence row CSC > power meter (once it delivered cadence this boot) > trainer. Each shows the source name.
+- **Polled every 500 ms** (no event path): APP badge (`BikeSensor::centralCount()`; when it drops to 0, `BLERelayManager::appLeftCleanly()` from the last `CENTRAL_DISCONNECTED` picks grey or orange, orange falls back to grey after 5 min), Trainer badge and rows (`trainerStatus()`), fan control (`FanHRAdapter::currentStatus()`: mode in effect, speed).
+- **Touch**: plus/minus and the mode long press come from the LVGL task and only set atomics; `loop()` applies them. Plus/minus call `HeartRateSettings::requestShift()` (±5 bpm, NVS save 3 s after the last tap). The mode cycles Pure → Smart → Hybrid → Pure and skips Hybrid while `FanModeSettings::hybridBlockReason()` is set.
+- **Panel wake**: HR > 0, power or cadence > 0, sensor/trainer state changes, a connected app and web POSTs (`noteUserActivity()` in the API gate wrappers) call `homewind_powersave_wake()`, at most once per second.
 
 **API**:
 ```cpp
@@ -241,9 +246,10 @@ public:
   void setHeartRate(uint16_t bpm);
   void updateHRState();
   void setBikeMetrics(const hw::BikeMetrics& m);  // latched BIKE_METRICS power/cadence
-  void updateCSCState();  // cadence card over CSC and PWR (src/core/BikeCard.h)
+  void updateCSCState();  // power and cadence rows over CSC, PWR and trainer (src/core/BikeCard.h)
   void updateFans();
   void markFansDirty();  // Deferred update (safe from any task, incl. LVGL event callback)
+  void noteUserActivity();  // web UI change (any task): panel wake
   void setUrl(const char* url);
 };
 ```

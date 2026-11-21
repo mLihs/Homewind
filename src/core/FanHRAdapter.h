@@ -125,6 +125,8 @@ public:
     out = _reported;
     return _reportedValid;
   }
+  /** Loop task: the live FAN_CONTROL status (display) */
+  hw::FanControlStatus currentStatus() const;
 #endif
   
   /**
@@ -180,6 +182,10 @@ private:
   bool _globalTargetPower;  // Global target power state
   uint8_t _globalTargetSpeedPct; // Global target speed
   bool _postConnectResetPending; // Set when post-connect sequence resets tracking
+  // HR range of the last loop; a change (touch plus/minus, web UI) is sent at once
+  uint16_t _rangeMin = 0;
+  uint16_t _rangeMax = 0;
+  bool _sendNow = false;
   
   // Per-fan runtime state (indexed by fan index)
   static const uint8_t MAX_FANS = 4;
@@ -231,7 +237,6 @@ private:
   bool blendLoop(uint32_t nowMs);  // true: Smart/Hybrid handled this loop
   bool powerOffAll();  // false if the library rejected the command
   void lastSent(bool& on, uint8_t& pct) const;  // over fans with power ON acknowledged
-  hw::FanControlStatus currentStatus() const;
   void reportStatus(uint32_t nowMs);
 #endif
 };

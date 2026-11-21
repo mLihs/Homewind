@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-11-21
+
+Touch display redesign (HomeWindWSAmoled 1.7.0).
+
+### Added
+
+- **Touch main screen:** status bar with "APP" and "Trainer" badges (green connected, orange lost, grey not yet connected; APP turns grey when the app ends the link itself (HCI 0x13, e.g. Zwift closed) and orange for 5 minutes after a dropped link; Trainer hidden while paused or not mirrored this boot), HR card, power row, cadence row and a fan control field.
+  - Power row: power meter, else the trainer. Cadence row: cadence sensor, else the power meter (once it sent cadence this boot), else the trainer. Each row shows the source name and "210 W" / "85 RPM" or "Disconnected", and is hidden without a source.
+  - Fan control: mode in effect (Pure / Smart / Hybrid), fan speed in % and one dot per fan.
+  - Plus / minus shift the HR range by 5 bpm (span stays, within 50–200 bpm). Plus lowers the range (more wind). The change is sent to the fans at once and releases the Smart/Hybrid fall-rate hold, so minus takes effect right away.
+  - Long press (0.7 s) on the mode field: Pure → Smart → Hybrid → Pure; Hybrid is skipped while it would be refused in the web UI (no HR sensor, no power source, HR span too small).
+- **Screensaver:** badges, HR, power, cadence and fans (dots and speed) in large values.
+- **Panel off:** after 10 min in the screensaver without activity the display switches off (burn-in). Heart rate, power or cadence above 0, a sensor or trainer connecting, a connected app or a change in the web UI switch it back on with the screensaver.
+
+### Changed
+
+- **Touch:** a touch while the display is dimmed or in the screensaver only wakes it; it no longer triggers the control under the finger. The fan toggles are gone (fans follow the mode).
+- **HR range:** a change from the web UI or the Touch display applies at once and is saved to NVS 3 s after the last change (one write for a series of taps). A restart or firmware update within those 3 s keeps the previous range.
+- **Hybrid check:** web UI and Touch display share `FanModeSettings::hybridBlockReason()`.
+- **Docs:** `FAN_CONTROL` and the fan mode actions are no longer marked "test firmware only", and the trainer features no longer need `--trainer` (`ENDPOINT.md`, `WEBSOCKET_PROTOCOL.md`, `05_APIS.md`).
+
+### Fixed
+
+- **Trainer enable / forget during a running setup:** answered 200, and the finished setup stored the trainer again. Now 409 `Discovery or trainer setup running`; a command queued just behind the setup is ignored.
+- **APP badge after a lost event:** the "app ended the link itself" flag from an earlier app is cleared on a NimBLE host reset and after an event overflow, so a dropped link shows orange instead of grey.
+
+### Dependencies
+
+- HomeWindWSAmoled 1.7.0 (Touch).
+- BluetoothBikeSensorServer 3.3.4: mirror advertising cuts the service list instead of failing `begin()`; a failed trainer setup resumes the running mirror.
+
 ## [2.0.0] - 2026-11-20
 
 Trainer mirror is on in every release build. Single-file WebUI, CSRF on action POSTs, and the WebUI polish from Unreleased.

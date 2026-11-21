@@ -103,9 +103,49 @@ bool HeartRateSettings::requestMax(uint16_t max, uint16_t& outMin, uint16_t& out
   return true;
 }
 
+bool HeartRateSettings::requestShift(int8_t steps, uint16_t& outMin, uint16_t& outMax) {
+  if (!_initialized || MaintenanceMode::admissionClosed()) {
+    return false;
+  }
+
+  const int delta = steps * static_cast<int>(SHIFT_STEP);
+  portENTER_CRITICAL(&_mux);
+  uint16_t baseMin;
+  uint16_t baseMax;
+  requestBaseLocked(baseMin, baseMax);
+  const bool ok = baseMin + delta >= HARD_MIN && baseMax + delta <= HARD_MAX;
+  if (ok) {
+    _pendingMin = static_cast<uint16_t>(baseMin + delta);
+    _pendingMax = static_cast<uint16_t>(baseMax + delta);
+    _pendingValid = true;
+  }
+  outMin = ok ? _pendingMin : baseMin;
+  outMax = ok ? _pendingMax : baseMax;
+  portEXIT_CRITICAL(&_mux);
+
+  HW_DEBUG_PRINTF("[HeartRateSettings] Shift %d %s: min=%u, max=%u\n", delta,
+                  ok ? "queued" : "rejected", outMin, outMax);
+  return ok;
+}
+
 void HeartRateSettings::loop() {
   if (!_initialized) {
     return;
+  }
+
+  if (_saveDue) {
+    if (MaintenanceMode::admissionClosed()) {
+      _saveDue = false;
+      HW_DEBUG_PRINTLN("[HeartRateSettings] Pending save discarded (maintenance)");
+    } else if (millis() - _changedMs >= SAVE_DELAY_MS) {
+      _saveDue = false;
+      if (saveToNVS()) {
+        HW_DEBUG_PRINTF("[HeartRateSettings] Range saved to NVS: min=%u, max=%u\n",
+                        _minHeartRate, _maxHeartRate);
+      } else {
+        HW_ERROR_PRINTLN("[HeartRateSettings] Failed to save heart rate range to NVS");
+      }
+    }
   }
   
   // Take and apply in one section: a request in between would otherwise base
@@ -130,11 +170,9 @@ void HeartRateSettings::loop() {
     return;
   }
   
-  if (saveToNVS()) {
-    HW_DEBUG_PRINTF("[HeartRateSettings] Range applied: min=%u, max=%u (saved to NVS)\n", min, max);
-  } else {
-    HW_ERROR_PRINTLN("[HeartRateSettings] Failed to save heart rate range to NVS");
-  }
+  _saveDue = true;
+  _changedMs = millis();
+  HW_DEBUG_PRINTF("[HeartRateSettings] Range applied: min=%u, max=%u\n", min, max);
   
 #if HOMEWIND_ENABLE_WEBSOCKET
   extern WebSocketTelemetry* g_webSocketTelemetry;

@@ -504,6 +504,33 @@ static void testSeed() {
   CHECK(gap.last.dominant == FanDominant::Hold);
 }
 
+// Touch minus: the range moves up, the fan follows at once instead of the cool-down rate.
+static void testReleaseHold() {
+  for (const FanMode mode : {FanMode::Smart, FanMode::Hybrid}) {
+    Rig held(mode);
+    Rig released(mode);
+    for (int t = 0; t < 60; t++) {
+      held.step(t, 0, false, 150);
+      released.step(t, 0, false, 150);
+    }
+    CHECK(held.last.pct >= 60 && held.last.pct <= 66);
+    held.in.minHr = released.in.minHr = 130;
+    held.in.maxHr = released.in.maxHr = 190;
+    released.blend.releaseHold();
+    held.step(60, 0, false, 150);
+    released.step(60, 0, false, 150);
+    CHECK(held.last.dominant == FanDominant::Hold);
+    CHECK(held.last.pct >= 60);
+    CHECK(released.last.dominant == FanDominant::Hr);
+    CHECK(released.last.pct >= 30 && released.last.pct <= 34);
+    // One-shot: later drops fall at the cool-down rate again.
+    released.in.minHr = 140;
+    released.in.maxHr = 200;
+    released.step(61, 0, false, 150);
+    CHECK(released.last.dominant == FanDominant::Hold);
+  }
+}
+
 static void testHoldBand() {
   // From ON, HR 107 (minHR 110, margin 5) holds the fan for minutes.
   Rig on(FanMode::Smart);
@@ -667,6 +694,7 @@ int main() {
   testSmartShaping();
   testFailsafe();
   testSeed();
+  testReleaseHold();
   testHoldBand();
   testStaleDecay();
   testPresencePreconditions();

@@ -204,6 +204,21 @@ void FanHRAdapter::loop(uint32_t nowMs) {
     return;
   }
 
+  if (_hrSettings) {
+    const uint16_t lo = _hrSettings->getMin();
+    const uint16_t hi = _hrSettings->getMax();
+    if (lo != _rangeMin || hi != _rangeMax) {
+      if (_rangeMax != 0) {
+        _sendNow = true;
+#if HW_ENABLE_FAN_POWER_MODE
+        _blend.releaseHold();
+#endif
+      }
+      _rangeMin = lo;
+      _rangeMax = hi;
+    }
+  }
+
 #if HW_ENABLE_FAN_POWER_MODE
   if (blendLoop(nowMs)) {
     return;
@@ -487,10 +502,11 @@ void FanHRAdapter::sendTargets(uint32_t nowMs) {
   }
   
   // Throttle: only update if interval elapsed
-  if (nowMs - _lastControlMs < FANHR_UPDATE_INTERVAL_MS) {
+  if (!_sendNow && nowMs - _lastControlMs < FANHR_UPDATE_INTERVAL_MS) {
     return;
   }
   
+  _sendNow = false;
   _lastControlMs = nowMs;
   
   // Priority 2: Apply HR control to ACTIVE fans using orchestrated functions

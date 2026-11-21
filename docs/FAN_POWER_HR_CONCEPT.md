@@ -681,9 +681,7 @@ re-ridden. Basic: 1.8.1 flashed over OTA and NVS checked (2026-11-14).
 - Saunders et al. 2005, air velocity and heat storage — https://read.qxmd.com/read/15743384/
 - Otani et al. 2018, airflow and endurance in cycling — https://vufind.lboro.ac.uk/PrimoRecord/cdi_proquest_miscellaneous_1948760709
 - Fernandez et al. 2023, fan cooling at fixed HR (~15 % more workload) — https://scholars.georgiasouthern.edu/en/publications/fan-cooling-improves-submaximal-exercise-capacity-in-an-indoor-th/
-- Storniolo et al. 2020, HR recovery kinetics after sprints — https://www.frontiersin.org/articles/10.3389/fpsyg.2019.02950/full
-- Spörri et al. 2022, HR kinetics on a cycle ergometer — https://www.frontiersin.org/journals/control-engineering/articles/10.3389/fcteg.2022.894180/full
-- Kenny, Carter, Journeay 2006, thermoregulation after exercise — https://nutrition-evidence.com/article/92420/thermoregulatory-control-following-dynamic-exercise
+- Storniolo et al. 2020, HR recovery kinetics after sprints — https://www.frontiersin.org/3ynamic-exercise
 - Coyle & González-Alonso 2001, cardiovascular drift — https://scilit.com/publications/b2c41c04695672f811b81cfb09bf4f36
 - Verdel et al. 2021, CORE sensor validity — https://research.birmingham.ac.uk/en/publications/reliability-and-validity-of-the-core-sensor-to-assess-core-body-t
 - USARIEM ECTemp algorithm — https://usariem.health.mil/index.cfm/research/products/cbt_algorithm

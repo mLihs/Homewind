@@ -40,6 +40,14 @@ public:
   /** Loop task: apply the queued change and save it. Returns true if a change was applied. */
   bool loop();
 
+  /**
+   * Hybrid preconditions (web API and touch display). Reads loop-task values:
+   * a racing range change only shifts the check, FanBlend checks the span every loop.
+   * @return nullptr if Hybrid may be selected, else "no_hr_sensor",
+   *         "no_power_source" or "hr_span_too_small"
+   */
+  static const char* hybridBlockReason();
+
 private:
   bool load();
   bool save();

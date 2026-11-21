@@ -84,6 +84,8 @@ Total: 4 bytes
 - `min`: Minimum heart rate (BPM, little-endian)
 - `max`: Maximum heart rate (BPM, little-endian)
 
+Sent when the range changes: `heartrate/setmin`, `heartrate/setmax` or plus/minus on the Touch display (shifts min and max by 5 bpm). The new range applies at once; it is saved to NVS 3 s after the last change (since 2.1.0), so a restart within those 3 s keeps the previous range.
+
 ### Control Frames (WebUI Internal)
 
 Control frames are WebUI helpers (not application telemetry). They should be ignored by other consumers.
@@ -140,14 +142,14 @@ Total: 5 bytes
   - bit 0: power valid. The power meter is subscribed and has sent data since it connected (BikeSensor `lastPower()`). Stays set while it is connected; without a packet for more than 3 s, `power_w` is 0.
   - bit 1: cadence valid. The cadence source has delivered (BikeSensor `lastCadence()`): the CSC sensor while it is subscribed, otherwise a subscribed power meter once it has sent crank data. `cadence_rpm` is 0 when the last crank event (power meter) or CSC packet is older than 3 s; a CSC sensor also reports 0 itself when the crank stops.
   - bit 2: cadence comes from the power meter (no CSC sensor is subscribed). Can be set while bit 1 is clear (power meter without crank data yet).
-  - bit 3 (trainer firmware, `--trainer`): `power_w` is the trainer's (Cycling Power read along by the trainer mirror). Set with bit 0 while no power meter is connected (D2 in `docs/TRAINER_PROXY_DESIGN.md` §3: power meter first, then the trainer); a connected power meter without a sample yet leaves bit 0 clear instead. Cadence keeps BikeSensor's order (CSC sensor, power meter, trainer) without its own flag. Clients that ignore bit 3 show the trainer's power as power.
+  - bit 3 (`HW_ENABLE_TRAINER_MIRROR`, on in release builds since 2.0): `power_w` is the trainer's (Cycling Power read along by the trainer mirror). Set with bit 0 while no power meter is connected (D2 in `docs/TRAINER_PROXY_DESIGN.md` §3: power meter first, then the trainer); a connected power meter without a sample yet leaves bit 0 clear instead. Cadence keeps BikeSensor's order (CSC sensor, power meter, trainer) without its own flag. Clients that ignore bit 3 show the trainer's power as power.
   - bits 4–7: reserved, 0
 
-Sent when the encoded value changes (new power or cadence sample, or a validity change, checked at least once per second), coalesced by the dirty flag like `HEART_RATE`. Sent once per client after connect (staged connect of the first client, and with the unicast snapshots requested by `telemetry/refresh?client_id=`). In the release firmware, fan control uses heart rate only; see `FAN_CONTROL` for the Smart/Hybrid test firmware.
+Sent when the encoded value changes (new power or cadence sample, or a validity change, checked at least once per second), coalesced by the dirty flag like `HEART_RATE`. Sent once per client after connect (staged connect of the first client, and with the unicast snapshots requested by `telemetry/refresh?client_id=`). Smart and Hybrid also use power; see `FAN_CONTROL`.
 
-#### FAN_CONTROL (0x0E) - Fan Mode and Target (test firmware only)
+#### FAN_CONTROL (0x0E) - Fan Mode and Target
 
-Only in firmware built with `HW_ENABLE_FAN_POWER_MODE=1` (`tools/build.sh --fan-power`); concept `docs/FAN_POWER_HR_CONCEPT.md` §5. Encoded by `hw::encodeFanControl()` (`src/core/FanControlFrame.h`).
+In firmware built with `HW_ENABLE_FAN_POWER_MODE=1`, the default in every release build since 1.8.0 (`Config.h`); concept `docs/FAN_POWER_HR_CONCEPT.md` §5. Encoded by `hw::encodeFanControl()` (`src/core/FanControlFrame.h`).
 
 **Payload:**
 ```
@@ -168,7 +170,7 @@ Sent when the status changes, at most once per 3 s (a mode, FTP or cool-down cha
 
 #### TRAINER_STATUS (0x0F) - Trainer Mirror Status (trainer firmware only)
 
-Only in firmware built with `HW_ENABLE_TRAINER_MIRROR=1` (`tools/build.sh --trainer`); design `docs/TRAINER_PROXY_DESIGN.md`, spec `docs/AGENT_TRAINER_MIRROR.md` Task 4. Same data as `GET /api/v1/action/trainer/status`.
+Only in firmware built with `HW_ENABLE_TRAINER_MIRROR=1` (every release build since 2.0); design `docs/TRAINER_PROXY_DESIGN.md`, spec `docs/AGENT_TRAINER_MIRROR.md` Task 4. Same data as `GET /api/v1/action/trainer/status`.
 
 **Payload:**
 ```

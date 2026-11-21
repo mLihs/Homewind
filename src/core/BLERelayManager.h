@@ -173,6 +173,8 @@ public:
   uint8_t getConfiguredSensorCount() const { return _sensorCount; }
   uint8_t getConnectedSensorCount() const { return _connectedCount; }
   uint8_t getLastDiscoveryCount() const { return _lastDiscoveryCount; }
+  /** The last app (central) to disconnect ended the link itself (HCI 0x13), not a timeout */
+  bool appLeftCleanly() const { return _appLeftCleanly; }
   bool lastHeartRate(uint16_t& bpm) const { bpm = _hrBpm; return _hrValid; }
   // Any task; false unless the power meter is subscribed and has sent data.
   bool lastPower(BikeSensor::PowerSample& sample, uint32_t& ageMs) const {
@@ -256,6 +258,7 @@ private:
   EventRecord _events[EVENT_FIFO_DEPTH];
   uint8_t _eventCount;
   bool _eventsDropped;
+  bool _appLeftCleanly;
   DoneRecord _done[2];
   uint8_t _doneCount;
   uint16_t _hrBpm;

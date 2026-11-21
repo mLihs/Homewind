@@ -83,6 +83,11 @@ static void maintenanceGateWrapper(AsyncWebServerRequest* request, void (*handle
   if (!WebHelpers::requireHomewindHeader(request)) {
     return;
   }
+#if HW_ENABLE_DISPLAY
+  if (request->method() == HTTP_POST && g_displayManager) {
+    g_displayManager->noteUserActivity();
+  }
+#endif
   
   // If maintenance not active, allow request
   if (!MaintenanceMode::isActive()) {
@@ -1448,23 +1453,6 @@ void ApiActions::handleHeartRateSetMax(AsyncWebServerRequest* request) {
 #include "../core/FanModeSettings.h"
 extern FanModeSettings* g_fanModeSettings;
 
-static bool sensorConfigured(BikeSensor::SensorType type) {
-  BikeSensor::SensorInfo info;
-  return BikeSensor::info(type, info) && info.state != BikeSensor::SlotState::EMPTY;
-}
-
-// D2: the trainer is a power source while mirrored, or set up for the next boot.
-static bool trainerConfigured() {
-#if HW_ENABLE_TRAINER_MIRROR
-  if (!g_bleRelayManager) return false;
-  BLERelayManager::TrainerStatus s;
-  g_bleRelayManager->trainerStatus(s);
-  return s.mirror || (s.enabled && s.mac[0] != '\0');
-#else
-  return false;
-#endif
-}
-
 // mode: pure|smart|hybrid, ftp: watts (clamped to 100..500), cooldown: -2..2; all optional,
 // applied together.
 // Values are read back through the FAN_CONTROL frame.
@@ -1518,18 +1506,7 @@ void ApiActions::handleFanModeSet(AsyncWebServerRequest* request) {
   }
 
   if (setMode && mode == static_cast<uint8_t>(hw::FanMode::Hybrid)) {
-    // Min/max are loop-task values; a racing change only shifts this check,
-    // FanBlend checks the span again on every loop.
-    const uint16_t minHr = g_heartRateSettings->getMin();
-    const uint16_t maxHr = g_heartRateSettings->getMax();
-    const char* reason = nullptr;
-    if (!sensorConfigured(BikeSensor::SensorType::HEART_RATE)) {
-      reason = "no_hr_sensor";
-    } else if (!sensorConfigured(BikeSensor::SensorType::POWER) && !trainerConfigured()) {
-      reason = "no_power_source";
-    } else if (maxHr <= minHr || maxHr - minHr < hw::kFanMinSpanBpm) {
-      reason = "hr_span_too_small";
-    }
+    const char* reason = FanModeSettings::hybridBlockReason();
     if (reason) {
       char json[64];
       snprintf(json, sizeof(json), "{\"ok\":false,\"error\":\"%s\"}", reason);

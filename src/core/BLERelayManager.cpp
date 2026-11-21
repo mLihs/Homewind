@@ -120,6 +120,7 @@ BLERelayManager::BLERelayManager()
   , _lastSnapshotMs(0)
   , _eventCount(0)
   , _eventsDropped(false)
+  , _appLeftCleanly(false)
   , _doneCount(0)
   , _hrBpm(0)
   , _hrValid(false)
@@ -522,7 +523,11 @@ BleEnqueueResult BLERelayManager::enqueueTrainerSetupFromDiscovery(uint32_t gene
 BleEnqueueResult BLERelayManager::enqueueTrainerEnable(bool on) {
   portENTER_CRITICAL(&_bleMux);
   const bool known = _trainer.mac[0] != '\0';
+  const bool setupRunning = _trainer.setup == kTrainerSetupRunning;
   portEXIT_CRITICAL(&_bleMux);
+  if (setupRunning) {
+    return BleEnqueueResult::BUSY;   // the finished setup would store the trainer again
+  }
   if (on && !known) {
     return BleEnqueueResult::NO_TRAINER;
   }
@@ -533,6 +538,12 @@ BleEnqueueResult BLERelayManager::enqueueTrainerEnable(bool on) {
 }
 
 BleEnqueueResult BLERelayManager::enqueueTrainerForget() {
+  portENTER_CRITICAL(&_bleMux);
+  const bool setupRunning = _trainer.setup == kTrainerSetupRunning;
+  portEXIT_CRITICAL(&_bleMux);
+  if (setupRunning) {
+    return BleEnqueueResult::BUSY;
+  }
   hw::BleCommand cmd;
   cmd.kind = hw::BleCmdKind::TRAINER_FORGET;
   return pushCommand(cmd);
@@ -731,17 +742,25 @@ void BLERelayManager::applyCommand(const hw::BleCommand& cmd) {
       break;
 
     case hw::BleCmdKind::TRAINER_ENABLE:
+      if (_trainer.setup == kTrainerSetupRunning) {   // queued just behind a TRAINER_SETUP
+        HW_ERROR_PRINTLN("[BLE] Trainer enable ignored: setup running");
+        break;
+      }
       saveTrainerToNVS(cmd.on && _trainer.mac[0] != '\0', nullptr);
-      if (_trainer.setup != kTrainerSetupRunning) setTrainerSetupResult(kTrainerSetupIdle);   // no stale "ok"
+      setTrainerSetupResult(kTrainerSetupIdle);   // no stale "ok"
       break;
 
     case hw::BleCmdKind::TRAINER_FORGET: {
+      if (_trainer.setup == kTrainerSetupRunning) {
+        HW_ERROR_PRINTLN("[BLE] Trainer forget ignored: setup running");
+        break;
+      }
       if (!BikeSensor::trainerForget()) {
         HW_ERROR_PRINTLN("[BLE] trainerForget() failed");
       }
       const TrainerDev none = {};
       saveTrainerToNVS(false, &none);
-      if (_trainer.setup != kTrainerSetupRunning) setTrainerSetupResult(kTrainerSetupIdle);
+      setTrainerSetupResult(kTrainerSetupIdle);
       break;
     }
 #else
@@ -811,6 +830,7 @@ void BLERelayManager::processEvents() {
   if (_eventsDropped) {
     _eventsDropped = false;
     HW_ERROR_PRINTLN("[BLE] Event FIFO overflow, state resynced from the library");
+    _appLeftCleanly = false;   // the app's CENTRAL_DISCONNECTED may be among the dropped events
     refreshSnapshot();
     notifyDisplay(hw::kBleTypeHR);
     notifyDisplay(hw::kBleTypeCSC);
@@ -877,6 +897,14 @@ void BLERelayManager::processEvents() {
 
       case BikeSensor::EventType::HOST_RESET:
         HW_ERROR_PRINTF("[BLE] NimBLE host reset (reason=%d)\n", e.reason);
+        _appLeftCleanly = false;
+        break;
+
+      case BikeSensor::EventType::CENTRAL_DISCONNECTED:
+        BLE_LINK_PRINTF("[BLE] App disconnected (reason=0x%02X: %s)\n", e.reason,
+                        BikeSensor::disconnectReasonString(e.reason));
+        // NimBLE reports HCI reasons as BLE_HS_ERR_HCI_BASE (0x200) + code
+        _appLeftCleanly = e.reason == 0x200 + 0x13;  // Remote User Terminated
         break;
 
 #if HW_ENABLE_TRAINER_MIRROR

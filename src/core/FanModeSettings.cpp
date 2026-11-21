@@ -7,14 +7,54 @@
 
 #if HW_ENABLE_FAN_POWER_MODE && HW_ENABLE_NVS
 
+#include <BikeSensor.h>
 #include <Preferences.h>
 #include "DebugLog.h"
+#include "HeartRateSettings.h"
 #include "MaintenanceMode.h"
+#if HW_ENABLE_TRAINER_MIRROR
+#include "BLERelayManager.h"
+extern BLERelayManager* g_bleRelayManager;
+#endif
+
+extern HeartRateSettings* g_heartRateSettings;
 
 namespace {
 constexpr const char* kNvsNamespace = "homewind";
 constexpr const char* kNvsKey = "fan_mode";
+
+bool sensorConfigured(BikeSensor::SensorType type) {
+  BikeSensor::SensorInfo info;
+  return BikeSensor::info(type, info) && info.state != BikeSensor::SlotState::EMPTY;
+}
+
+// D2: the trainer is a power source while mirrored, or set up for the next boot.
+bool trainerConfigured() {
+#if HW_ENABLE_TRAINER_MIRROR
+  if (!g_bleRelayManager) return false;
+  BLERelayManager::TrainerStatus s;
+  g_bleRelayManager->trainerStatus(s);
+  return s.mirror || (s.enabled && s.mac[0] != '\0');
+#else
+  return false;
+#endif
+}
 }  // namespace
+
+const char* FanModeSettings::hybridBlockReason() {
+  if (!sensorConfigured(BikeSensor::SensorType::HEART_RATE)) {
+    return "no_hr_sensor";
+  }
+  if (!sensorConfigured(BikeSensor::SensorType::POWER) && !trainerConfigured()) {
+    return "no_power_source";
+  }
+  const uint16_t minHr = g_heartRateSettings ? g_heartRateSettings->getMin() : 0;
+  const uint16_t maxHr = g_heartRateSettings ? g_heartRateSettings->getMax() : 0;
+  if (maxHr <= minHr || maxHr - minHr < hw::kFanMinSpanBpm) {
+    return "hr_span_too_small";
+  }
+  return nullptr;
+}
 
 bool FanModeSettings::begin() {
   if (_initialized) {

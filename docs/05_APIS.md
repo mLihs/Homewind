@@ -327,7 +327,7 @@ Remove a fan from configuration.
 
 ---
 
-### Fan Mode Actions (test firmware only)
+### Fan Mode Actions (`HW_ENABLE_FAN_POWER_MODE`, on in release builds)
 
 Only in firmware built with `HW_ENABLE_FAN_POWER_MODE=1` (`tools/build.sh --fan-power`); concept `docs/FAN_POWER_HR_CONCEPT.md` §4–5. Routes under `action/fan/` stay reserved for fan devices.
 
@@ -350,7 +350,7 @@ Set the fan control mode, the FTP used by Hybrid and the cool-down of Smart and 
 - `409 Conflict`: `mode=hybrid` without its preconditions, body `{"ok":false,"error":"no_hr_sensor"}`, `"no_power_source"` or `"hr_span_too_small"` (max HR − min HR < 30 bpm); or `{"ok":false,"error":"maintenance_active"}`
 - `503 Service Unavailable`: System not ready or settings not available
 
-**Note**: The sensors only need to be configured, not connected. If a precondition is lost later, the stored mode stays Hybrid and the fans run as Smart until it is back (`FAN_CONTROL` `effective`/`reason`). In trainer firmware (`--trainer`), the trainer is a power source too (`no_power_source` only without a power meter and without a trainer that is mirrored or enabled); the fans use its power while no power meter is connected (D2).
+**Note**: The sensors only need to be configured, not connected. If a precondition is lost later, the stored mode stays Hybrid and the fans run as Smart until it is back (`FAN_CONTROL` `effective`/`reason`). With the trainer mirror (every release build since 2.0), the trainer is a power source too (`no_power_source` only without a power meter and without a trainer that is mirrored or enabled); the fans use its power while no power meter is connected (D2).
 
 ---
 
@@ -371,13 +371,13 @@ Reads the trainer's GATT into the mirror table (a 5 s scan for its advertising, 
 ```
 POST /api/v1/action/trainer/enable?on=<true|false>
 ```
-`on=false` releases the trainer (no mirror after the next restart, the stored table stays); `on=true` mirrors it again. **409** `No trainer set up` for `on=true` without a stored trainer.
+`on=false` releases the trainer (no mirror after the next restart, the stored table stays); `on=true` mirrors it again. **409** `No trainer set up` for `on=true` without a stored trainer; `Discovery or trainer setup running` while a setup runs (its result would overwrite the change).
 
 #### Trainer Forget
 ```
 POST /api/v1/action/trainer/forget
 ```
-Erases the stored trainer and its table; the mirror stops after the next restart.
+Erases the stored trainer and its table; the mirror stops after the next restart. **409** `Discovery or trainer setup running` while a setup runs.
 
 #### Trainer Status
 ```
@@ -706,7 +706,7 @@ Sent only when state changes (marked dirty).
 | `FIRMWARE_SEARCH_RESULT` | `0x0A` | Firmware search result | `[has_update:uint8][version_len:uint8][version:bytes][notes_len:uint16][notes:bytes]` |
 | `HEART_RATE_SETTINGS` | `0x0B` | Heart rate min/max settings | `[min:uint16][max:uint16]` |
 | `BIKE_METRICS` | `0x0D` | Power and cadence | `[power_w:int16][cadence_rpm:uint16][flags:uint8]` |
-| `FAN_CONTROL` | `0x0E` | Fan mode and target (test firmware only) | `[mode][effective][reason][target_on][target_pct][dominant][power_state][ftp_w:uint16][cooldown:int8]` |
+| `FAN_CONTROL` | `0x0E` | Fan mode and target (`HW_ENABLE_FAN_POWER_MODE`, on in release builds) | `[mode][effective][reason][target_on][target_pct][dominant][power_state][ftp_w:uint16][cooldown:int8]` |
 | `TRAINER_STATUS` | `0x0F` | Trainer mirror status (trainer firmware only) | `[state:uint8][flags:uint8][setup:uint8][name_len:uint8][name:bytes]` |
 | `APP_STATUS` | `0x10` | Apps (BLE centrals) connected to Homewind, relay or mirror (BLE firmware) | `[apps:uint8]` |
 
@@ -879,7 +879,7 @@ const connected = frame[13];
 
 ---
 
-#### FAN_CONTROL (0x0E) (test firmware only)
+#### FAN_CONTROL (0x0E) (`HW_ENABLE_FAN_POWER_MODE`, on in release builds)
 
 **Status**: Only with `HW_ENABLE_FAN_POWER_MODE=1`. Built from `FanHRAdapter::fanControlStatus()`, encoded by `hw::encodeFanControl()` (`src/core/FanControlFrame.h`)
 

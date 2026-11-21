@@ -1,4 +1,4 @@
-// Host test for src/core/BikeCard.h (display cadence card: CSC and power meter).
+// Host test for src/core/BikeCard.h (display power and cadence rows).
 // c++ -std=c++17 -Wall -Wextra -Werror -IHomewind/src/core \
 //   Homewind/tests/bike_card_test.cpp -o <out> && <out>
 
@@ -18,77 +18,97 @@ static int g_failures = 0;
     }                                                                   \
   } while (0)
 
-// Arguments: cscConfigured, cscConnected, pwrConfigured, pwrConnected
+static bool is(BikeRow r, BikeRowState state, BikeRowSource source) {
+  return r.state == state && r.source == source;
+}
+
+static constexpr BikeRowState H = BikeRowState::Hidden;
+static constexpr BikeRowState D = BikeRowState::Disconnected;
+static constexpr BikeRowState A = BikeRowState::Active;
 
 static void testNothingConfigured() {
-  const BikeCard c = selectBikeCard(false, false, false, false);
-  CHECK(c.state == BikeCardState::NotConfigured);
-  CHECK(!c.showPower);
+  const BikeSources s;
+  CHECK(is(selectPowerRow(s), H, BikeRowSource::None));
+  CHECK(is(selectCadenceRow(s), H, BikeRowSource::None));
 }
 
 static void testCscOnly() {
-  BikeCard c = selectBikeCard(true, true, false, false);
-  CHECK(c.state == BikeCardState::Active && !c.nameFromPower && !c.showPower);
-  c = selectBikeCard(true, false, false, false);
-  CHECK(c.state == BikeCardState::Inactive && !c.nameFromPower && !c.showPower);
+  BikeSources s;
+  s.cscConfigured = true;
+  CHECK(is(selectPowerRow(s), H, BikeRowSource::None));
+  CHECK(is(selectCadenceRow(s), D, BikeRowSource::Csc));
+  s.cscConnected = true;
+  CHECK(is(selectCadenceRow(s), A, BikeRowSource::Csc));
 }
 
 static void testPowerOnly() {
-  BikeCard c = selectBikeCard(false, false, true, true);
-  CHECK(c.state == BikeCardState::Active && c.nameFromPower && c.showPower);
-  c = selectBikeCard(false, false, true, false);
-  CHECK(c.state == BikeCardState::Inactive && c.nameFromPower && !c.showPower);
+  BikeSources s;
+  s.pwrConfigured = true;
+  CHECK(is(selectPowerRow(s), D, BikeRowSource::Power));
+  CHECK(is(selectCadenceRow(s), H, BikeRowSource::None));  // no cadence seen yet
+  s.pwrConnected = true;
+  CHECK(is(selectPowerRow(s), A, BikeRowSource::Power));
+  CHECK(is(selectCadenceRow(s), H, BikeRowSource::None));
+  // A meter with cadence (Assioma) keeps the row, also after a disconnect.
+  s.pwrCadence = true;
+  CHECK(is(selectCadenceRow(s), A, BikeRowSource::Power));
+  s.pwrConnected = false;
+  CHECK(is(selectPowerRow(s), D, BikeRowSource::Power));
+  CHECK(is(selectCadenceRow(s), D, BikeRowSource::Power));
 }
 
 static void testCscAndPower() {
-  // Power meter connected: its name, power shown
-  BikeCard c = selectBikeCard(true, true, true, true);
-  CHECK(c.state == BikeCardState::Active && c.nameFromPower && c.showPower);
-  c = selectBikeCard(true, false, true, true);
-  CHECK(c.state == BikeCardState::Active && c.nameFromPower && c.showPower);
-  // Power meter not connected: CSC name, no power
-  c = selectBikeCard(true, true, true, false);
-  CHECK(c.state == BikeCardState::Active && !c.nameFromPower && !c.showPower);
-  c = selectBikeCard(true, false, true, false);
-  CHECK(c.state == BikeCardState::Inactive && !c.nameFromPower && !c.showPower);
+  BikeSources s;
+  s.cscConfigured = s.pwrConfigured = s.pwrCadence = true;
+  s.cscConnected = s.pwrConnected = true;
+  CHECK(is(selectPowerRow(s), A, BikeRowSource::Power));
+  CHECK(is(selectCadenceRow(s), A, BikeRowSource::Csc));
+  // CSC lost: cadence falls back to the meter.
+  s.cscConnected = false;
+  CHECK(is(selectCadenceRow(s), A, BikeRowSource::Power));
+  // Both lost: CSC name.
+  s.pwrConnected = false;
+  CHECK(is(selectCadenceRow(s), D, BikeRowSource::Csc));
 }
 
-// Further arguments: trainerConfigured, trainerReady
 static void testTrainer() {
-  // Without a trainer: unchanged
-  CHECK(!selectBikeCard(true, true, true, true).nameFromTrainer);
-  // Trainer only
-  BikeCard c = selectBikeCard(false, false, false, false, true, true);
-  CHECK(c.state == BikeCardState::Active && c.nameFromTrainer && c.showPower);
-  c = selectBikeCard(false, false, false, false, true, false);
-  CHECK(c.state == BikeCardState::Inactive && c.nameFromTrainer && !c.showPower);
-  // D2: a connected power meter wins
-  c = selectBikeCard(false, false, true, true, true, true);
-  CHECK(c.state == BikeCardState::Active && !c.nameFromTrainer && c.nameFromPower && c.showPower);
-  // Power meter configured but not connected: trainer power and name
-  c = selectBikeCard(false, false, true, false, true, true);
-  CHECK(c.state == BikeCardState::Active && c.nameFromTrainer && c.showPower);
-  c = selectBikeCard(false, false, true, false, true, false);
-  CHECK(c.state == BikeCardState::Inactive && !c.nameFromTrainer && c.nameFromPower && !c.showPower);
-  // CSC connected: CSC name, trainer power
-  c = selectBikeCard(true, true, false, false, true, true);
-  CHECK(c.state == BikeCardState::Active && !c.nameFromTrainer && !c.nameFromPower && c.showPower);
-  c = selectBikeCard(true, false, false, false, true, true);
-  CHECK(c.nameFromTrainer && c.showPower);
-  c = selectBikeCard(true, false, false, false, true, false);
-  CHECK(c.state == BikeCardState::Inactive && !c.nameFromTrainer && !c.nameFromPower);
+  // Trainer alone: both rows show the trainer.
+  BikeSources s;
+  s.trainerConfigured = true;
+  CHECK(is(selectPowerRow(s), D, BikeRowSource::Trainer));
+  CHECK(is(selectCadenceRow(s), D, BikeRowSource::Trainer));
+  s.trainerReady = true;
+  CHECK(is(selectPowerRow(s), A, BikeRowSource::Trainer));
+  CHECK(is(selectCadenceRow(s), A, BikeRowSource::Trainer));
+
+  // D2: a connected power meter wins; while it is away the trainer gives power.
+  BikeSources p;
+  p.pwrConfigured = p.pwrConnected = p.trainerConfigured = p.trainerReady = true;
+  CHECK(is(selectPowerRow(p), A, BikeRowSource::Power));
+  CHECK(is(selectCadenceRow(p), A, BikeRowSource::Trainer));  // meter without cadence
+  p.pwrConnected = false;
+  CHECK(is(selectPowerRow(p), A, BikeRowSource::Trainer));
+  p.trainerReady = false;
+  CHECK(is(selectPowerRow(p), D, BikeRowSource::Power));
+  CHECK(is(selectCadenceRow(p), D, BikeRowSource::Trainer));
+
+  // CSC and trainer: CSC cadence, trainer power.
+  BikeSources c;
+  c.cscConfigured = c.cscConnected = c.trainerConfigured = c.trainerReady = true;
+  CHECK(is(selectPowerRow(c), A, BikeRowSource::Trainer));
+  CHECK(is(selectCadenceRow(c), A, BikeRowSource::Csc));
+  c.cscConnected = false;
+  CHECK(is(selectCadenceRow(c), A, BikeRowSource::Trainer));
+  c.trainerReady = false;
+  CHECK(is(selectCadenceRow(c), D, BikeRowSource::Csc));
 }
 
-// Arguments: showPower, powerValid, powerW
-static void testWatts() {
-  CHECK(bikeCardWatts(false, true, 210) == -1);
-  CHECK(bikeCardWatts(true, true, 210) == 210);
-  CHECK(bikeCardWatts(true, true, 0) == 0);    // valid but stale (BIKE_METRICS sends 0)
-  CHECK(bikeCardWatts(true, true, -5) == 0);
-  CHECK(bikeCardWatts(true, true, 1999) == 1999);
-  // Connected, no valid sample yet: hidden
-  CHECK(bikeCardWatts(true, false, 0) == -1);
-  CHECK(bikeCardWatts(false, false, 0) == -1);
+static void testValue() {
+  CHECK(bikeRowValue(true, 210) == 210);
+  CHECK(bikeRowValue(true, 0) == 0);     // valid but stale (BIKE_METRICS sends 0)
+  CHECK(bikeRowValue(true, -5) == 0);
+  CHECK(bikeRowValue(true, 1999) == 1999);
+  CHECK(bikeRowValue(false, 210) == 0);  // connected, no valid sample yet
 }
 
 int main() {
@@ -97,7 +117,7 @@ int main() {
   testPowerOnly();
   testCscAndPower();
   testTrainer();
-  testWatts();
+  testValue();
   if (g_failures) {
     std::printf("bike_card_test: %d failure(s)\n", g_failures);
     return EXIT_FAILURE;

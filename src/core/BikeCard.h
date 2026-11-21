@@ -1,6 +1,6 @@
 /**
  * @file BikeCard.h
- * @brief Arduino-free state of the display's cadence card (CSC, power meter, trainer)
+ * @brief Arduino-free state of the display's power and cadence rows
  *
  * Shared by DisplayManager and tests/bike_card_test.cpp.
  */
@@ -12,39 +12,54 @@
 
 namespace hw {
 
-enum class BikeCardState : uint8_t { NotConfigured, Inactive, Active };
+enum class BikeRowState : uint8_t { Hidden, Disconnected, Active };
+enum class BikeRowSource : uint8_t { None, Csc, Power, Trainer };
 
-struct BikeCard {
-  BikeCardState state;
-  bool nameFromPower;    // show the power meter's name, else the CSC sensor's
-  bool showPower;        // power meter connected, or trainer ready (D2)
-  bool nameFromTrainer;  // show the trainer's name (overrides nameFromPower)
+struct BikeRow {
+  BikeRowState state;
+  BikeRowSource source;  // whose name the row shows
 };
 
-// A connected sensor is also configured. Trainer: configured = mirrored this
-// boot, ready = connected and discovered; its power only without a meter (D2).
-inline BikeCard selectBikeCard(bool cscConfigured, bool cscConnected,
-                               bool pwrConfigured, bool pwrConnected,
-                               bool trainerConfigured = false, bool trainerReady = false) {
-  BikeCard c;
-  if (!cscConfigured && !pwrConfigured && !trainerConfigured) {
-    c.state = BikeCardState::NotConfigured;
-  } else {
-    c.state = (cscConnected || pwrConnected || trainerReady) ? BikeCardState::Active
-                                                             : BikeCardState::Inactive;
+// Inputs of both rows. A connected sensor is also configured. Trainer: configured =
+// mirrored this boot, ready = connected and discovered. pwrCadence: the power meter
+// delivered cadence this boot (BIKE_METRICS flag bit 2, latched by the caller).
+struct BikeSources {
+  bool cscConfigured = false;
+  bool cscConnected = false;
+  bool pwrConfigured = false;
+  bool pwrConnected = false;
+  bool pwrCadence = false;
+  bool trainerConfigured = false;
+  bool trainerReady = false;
+};
+
+// Power (D2): the power meter while connected, otherwise the trainer.
+inline BikeRow selectPowerRow(const BikeSources& s) {
+  if (!s.pwrConfigured && !s.trainerConfigured) {
+    return {BikeRowState::Hidden, BikeRowSource::None};
   }
-  c.nameFromPower = pwrConnected || !cscConfigured;
-  c.showPower = pwrConnected || trainerReady;
-  c.nameFromTrainer = trainerConfigured && !pwrConnected &&
-                      (trainerReady ? !cscConnected : (!cscConfigured && !pwrConfigured));
-  return c;
+  if (s.pwrConnected) return {BikeRowState::Active, BikeRowSource::Power};
+  if (s.trainerReady) return {BikeRowState::Active, BikeRowSource::Trainer};
+  return {BikeRowState::Disconnected, s.pwrConfigured ? BikeRowSource::Power : BikeRowSource::Trainer};
 }
 
-// Watts for homewind_set_csc_power(): -1 hides power (no meter connected or no
-// valid sample yet, BIKE_METRICS power-valid flag); a negative reading shows 0.
-inline int32_t bikeCardWatts(bool showPower, bool powerValid, int16_t powerW) {
-  if (!showPower || !powerValid) return -1;
-  return powerW < 0 ? 0 : powerW;
+// Cadence: CSC sensor, else power meter (only once it delivered cadence), else trainer.
+inline BikeRow selectCadenceRow(const BikeSources& s) {
+  const bool pwr = s.pwrConfigured && s.pwrCadence;
+  if (!s.cscConfigured && !pwr && !s.trainerConfigured) {
+    return {BikeRowState::Hidden, BikeRowSource::None};
+  }
+  if (s.cscConnected) return {BikeRowState::Active, BikeRowSource::Csc};
+  if (pwr && s.pwrConnected) return {BikeRowState::Active, BikeRowSource::Power};
+  if (s.trainerReady) return {BikeRowState::Active, BikeRowSource::Trainer};
+  const BikeRowSource name =
+      s.cscConfigured ? BikeRowSource::Csc : (pwr ? BikeRowSource::Power : BikeRowSource::Trainer);
+  return {BikeRowState::Disconnected, name};
+}
+
+// Row value: 0 until a valid sample (BIKE_METRICS valid flag); a negative reading shows 0.
+inline uint16_t bikeRowValue(bool valid, int16_t value) {
+  return (!valid || value < 0) ? 0 : static_cast<uint16_t>(value);
 }
 
 }  // namespace hw

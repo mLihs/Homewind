@@ -62,10 +62,20 @@ public:
    * @return false if not initialized or maintenance admission is closed
    */
   bool requestMax(uint16_t max, uint16_t& outMin, uint16_t& outMax);
+
+  /**
+   * Queue a shift of min and max by steps × SHIFT_STEP bpm (any task; touch plus/minus).
+   * The span stays; a shift that would cross HARD_MIN or HARD_MAX is rejected.
+   * @param outMin, outMax Range loop() will apply (unchanged when rejected)
+   * @return false if rejected, not initialized or maintenance admission is closed
+   */
+  bool requestShift(int8_t steps, uint16_t& outMin, uint16_t& outMax);
   
   /**
-   * Loop task: apply the queued range, save to NVS and mark HEART_RATE_SETTINGS dirty.
-   * A request still queued once maintenance admission is closed is discarded.
+   * Loop task: apply the queued range at once and mark HEART_RATE_SETTINGS dirty.
+   * Saves to NVS SAVE_DELAY_MS after the last applied change, so a series of
+   * requests is one write. A request or save still pending once maintenance
+   * admission is closed is discarded.
    */
   void loop();
   
@@ -102,6 +112,8 @@ private:
   static constexpr uint16_t DEFAULT_MIN = 80;
   static constexpr uint16_t DEFAULT_MAX = 160;
   static constexpr uint16_t MIN_GAP = 10; // Minimum gap between min and max
+  static constexpr uint16_t SHIFT_STEP = 5;
+  static constexpr uint32_t SAVE_DELAY_MS = 3000;
   
   // NVS namespace and key
   static constexpr const char* NVS_NAMESPACE = "homewind";
@@ -140,6 +152,10 @@ private:
   bool _pendingValid;
   uint16_t _pendingMin;
   uint16_t _pendingMax;
+
+  // Loop task only: applied range not yet in NVS
+  bool _saveDue = false;
+  uint32_t _changedMs = 0;
   
   /** Under _mux: base range for a new request (pending if queued, else current). */
   void requestBaseLocked(uint16_t& min, uint16_t& max) const;
