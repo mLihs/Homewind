@@ -38,6 +38,20 @@ extern BLERelayManager* g_bleRelayManager;
 extern FanController* g_fanController;
 #endif
 
+#include "../core/FanBlend.h"
+#include "../core/BikeMetrics.h"
+#if HW_ENABLE_FAN_POWER_MODE
+#include "../core/FanControlFrame.h"
+#include "../core/FanHRAdapter.h"
+#include "../core/FanModeSettings.h"
+extern FanHRAdapter* g_fanHrAdapter;
+extern FanModeSettings* g_fanModeSettings;
+#endif
+#if HW_ENABLE_NVS
+#include "../core/HeartRateSettings.h"
+extern HeartRateSettings* g_heartRateSettings;
+#endif
+
 #if HW_ENABLE_DISPLAY
 #include "../core/DisplayManager.h"
 #endif
@@ -193,6 +207,11 @@ void ApiActions::registerRoutes(void* serverPtr) {
   server->on("/api/v1/system/info", HTTP_GET, [](AsyncWebServerRequest* req) {
     maintenanceGateWrapper(req, handleSystemInfo);
   });
+
+  // Status snapshot for Karoo / other HTTP clients (no WebSocket slot)
+  server->on("/api/v1/state", HTTP_GET, [](AsyncWebServerRequest* req) {
+    maintenanceGateWrapper(req, handleState);
+  });
   
   // Maintenance mode debug endpoints (whitelisted; POST still needs X-Homewind)
   server->on("/api/v1/action/system/maintenance/begin", HTTP_POST, [](AsyncWebServerRequest* req) {
@@ -225,9 +244,16 @@ void ApiActions::registerRoutes(void* serverPtr) {
   server->on("/api/v1/action/heartrate/setmax", HTTP_POST, [](AsyncWebServerRequest* req) {
     maintenanceGateWrapper(req, handleHeartRateSetMax);
   });
+  // Karoo / Touch-equivalent: shift HR range ±5 bpm (up = more wind = lower range)
+  server->on("/api/v1/action/fan/step", HTTP_POST, [](AsyncWebServerRequest* req) {
+    maintenanceGateWrapper(req, handleFanStep);
+  });
 #if HW_ENABLE_FAN_POWER_MODE
   server->on("/api/v1/action/fanmode/set", HTTP_POST, [](AsyncWebServerRequest* req) {
     maintenanceGateWrapper(req, handleFanModeSet);
+  });
+  server->on("/api/v1/action/fanmode/cycle", HTTP_POST, [](AsyncWebServerRequest* req) {
+    maintenanceGateWrapper(req, handleFanModeCycle);
   });
 #endif
 #if HW_ENABLE_TRAINER_MIRROR
@@ -1299,6 +1325,208 @@ void ApiActions::handleSystemInfo(AsyncWebServerRequest* request) {
   sendResponse(request, 200, out);
 }
 
+void ApiActions::handleState(AsyncWebServerRequest* request) {
+  // Karoo / HTTP clients: key=value snapshot (docs/AGENT + Feature request schema).
+  // Names are last so commas/spaces in them do not break parsing.
+  static const size_t OUT_BUF_SIZE = 768;
+  char out[OUT_BUF_SIZE];
+  size_t used = 0;
+  bool truncated = false;
+
+  auto modeName = [](hw::FanMode m) -> const char* {
+    switch (m) {
+      case hw::FanMode::Smart:  return "smart";
+      case hw::FanMode::Hybrid: return "hybrid";
+      default:                  return "pure";
+    }
+  };
+
+  hw::FanMode mode = hw::FanMode::Pure;
+  hw::FanMode effective = hw::FanMode::Pure;
+  uint8_t fanPct = 0;
+  uint16_t ftp = 0;
+#if HW_ENABLE_FAN_POWER_MODE
+  if (g_fanModeSettings) {
+    mode = g_fanModeSettings->mode();
+    effective = mode;
+    ftp = g_fanModeSettings->ftpW();
+  }
+  if (g_fanHrAdapter && g_fanHrAdapter->ready()) {
+    hw::FanControlStatus st;
+    if (g_fanHrAdapter->fanControlStatus(st)) {
+      mode = st.mode;
+      effective = st.effective;
+      fanPct = st.targetOn ? st.targetPct : 0;
+      ftp = st.ftpW;
+    } else {
+      const hw::FanControlStatus live = g_fanHrAdapter->currentStatus();
+      mode = live.mode;
+      effective = live.effective;
+      fanPct = live.targetOn ? live.targetPct : 0;
+      ftp = live.ftpW;
+    }
+  }
+#endif
+
+  char fans[16];
+  {
+    // 0 empty, 1 on, 2 off, 3 error — four fixed slots
+    uint8_t slot[4] = {0, 0, 0, 0};
+#if HW_ENABLE_FANS
+    if (g_fanController && g_fanController->ready()) {
+      for (uint8_t i = 0; i < FanController::MAX_FANS && i < 4; i++) {
+        FanConfig cfg;
+        if (!g_fanController->getFanConfig(i, cfg)) {
+          slot[i] = 0;
+          continue;
+        }
+        SmartMiFanInfo info;
+        if (!SmartMiFan::info(i, info)) {
+          slot[i] = 3;
+          continue;
+        }
+        const FanParticipationState p = SmartMiFan::participation(i);
+        if (p == FanParticipationState::ERROR || !info.ready) {
+          slot[i] = 3;
+        } else if (p == FanParticipationState::ACTIVE) {
+          slot[i] = 1;
+        } else {
+          slot[i] = 2;
+        }
+      }
+    }
+#endif
+    snprintf(fans, sizeof(fans), "%u,%u,%u,%u", slot[0], slot[1], slot[2], slot[3]);
+  }
+
+  uint16_t hr = 0;
+  uint16_t hrMin = 80;
+  uint16_t hrMax = 160;
+  const char* limit = "none";
+#if HW_ENABLE_NVS
+  if (g_heartRateSettings && g_heartRateSettings->ready()) {
+    hrMin = g_heartRateSettings->getMin();
+    hrMax = g_heartRateSettings->getMax();
+    // Plus lowers the range (−5); minus raises it (+5). Same as Touch.
+    const bool blockPlus = hrMin < 50 + 5;
+    const bool blockMinus = hrMax + 5 > 200;
+    if (blockPlus && blockMinus) limit = "min";  // at both hard ends; plus is the tighter UX
+    else if (blockPlus) limit = "min";
+    else if (blockMinus) limit = "max";
+  }
+#endif
+#if HW_ENABLE_BLE
+  if (g_bleRelayManager && g_bleRelayManager->ready()) {
+    uint16_t bpm = 0;
+    if (g_bleRelayManager->lastHeartRate(bpm)) hr = bpm;
+  }
+#endif
+
+  char hrSensor = '-';
+  char pwrSensor = '-';
+  char cscSensor = '-';
+  char hrName[64];
+  char pwrName[64];
+  char cscName[64];
+  hrName[0] = pwrName[0] = cscName[0] = '\0';
+#if HW_ENABLE_BLE
+  if (g_bleRelayManager && g_bleRelayManager->ready()) {
+    HwSensorInfo sensors[BLERelayManager::MAX_SENSORS];
+    const uint8_t count =
+        g_bleRelayManager->getConfiguredSensors(sensors, BLERelayManager::MAX_SENSORS);
+    for (uint8_t i = 0; i < count; i++) {
+      const char flag = sensors[i].connected ? '1' : '0';
+      if (strcmp(sensors[i].type, "HR") == 0) {
+        hrSensor = flag;
+        strncpy(hrName, sensors[i].name, sizeof(hrName) - 1);
+        hrName[sizeof(hrName) - 1] = '\0';
+      } else if (strcmp(sensors[i].type, "PWR") == 0) {
+        pwrSensor = flag;
+        strncpy(pwrName, sensors[i].name, sizeof(pwrName) - 1);
+        pwrName[sizeof(pwrName) - 1] = '\0';
+      } else if (strcmp(sensors[i].type, "CSC") == 0) {
+        cscSensor = flag;
+        strncpy(cscName, sensors[i].name, sizeof(cscName) - 1);
+        cscName[sizeof(cscName) - 1] = '\0';
+      }
+    }
+  }
+#endif
+
+  int powerW = 0;
+  uint8_t powerValid = 0;
+  uint8_t powerFromTrainer = 0;
+  uint16_t cadenceRpm = 0;
+  uint8_t cadenceValid = 0;
+  uint8_t cadenceFromPower = 0;
+#if HW_ENABLE_BLE
+  if (g_bleRelayManager && g_bleRelayManager->ready()) {
+    const hw::BikeMetrics& m = g_bleRelayManager->bikeMetrics();
+    powerValid = (m.flags & hw::kBikePowerValid) ? 1 : 0;
+    powerFromTrainer = (m.flags & hw::kBikePowerFromTrainer) ? 1 : 0;
+    powerW = m.powerW;
+    if (powerW < 0) powerW = 0;
+    cadenceValid = (m.flags & hw::kBikeCadenceValid) ? 1 : 0;
+    cadenceFromPower = (m.flags & hw::kBikeCadenceFromPower) ? 1 : 0;
+    cadenceRpm = m.cadenceRpm;
+  }
+#endif
+
+  uint8_t trainerState = 0;
+  uint8_t trainerMirror = 0;
+  char trainerName[32];
+  trainerName[0] = '\0';
+#if HW_ENABLE_TRAINER_MIRROR
+  if (g_bleRelayManager && g_bleRelayManager->ready()) {
+    BLERelayManager::TrainerStatus ts;
+    g_bleRelayManager->trainerStatus(ts);
+    trainerState = ts.state;
+    trainerMirror = ts.mirror ? 1 : 0;
+    strncpy(trainerName, ts.name, sizeof(trainerName) - 1);
+    trainerName[sizeof(trainerName) - 1] = '\0';
+  }
+#endif
+
+  uint8_t apps = 0;
+#if HW_ENABLE_BLE
+  apps = BikeSensor::centralCount();
+#endif
+
+  if (!appendf(out, OUT_BUF_SIZE, used,
+               "v=1\nmode=%s\neffective=%s\nfan_pct=%u\nfans=%s\n"
+               "hr=%u\nhr_min=%u\nhr_max=%u\nftp=%u\nlimit=%s\n"
+               "hr_sensor=%c\npwr_sensor=%c\ncsc_sensor=%c\n"
+               "power=%d,%u,%u\ncadence=%u,%u,%u\n"
+               "trainer=%u,%u\napps=%u\n",
+               modeName(mode), modeName(effective), static_cast<unsigned>(fanPct), fans,
+               static_cast<unsigned>(hr), static_cast<unsigned>(hrMin),
+               static_cast<unsigned>(hrMax), static_cast<unsigned>(ftp), limit,
+               hrSensor, pwrSensor, cscSensor,
+               powerW, static_cast<unsigned>(powerValid),
+               static_cast<unsigned>(powerFromTrainer),
+               static_cast<unsigned>(cadenceRpm), static_cast<unsigned>(cadenceValid),
+               static_cast<unsigned>(cadenceFromPower),
+               static_cast<unsigned>(trainerState), static_cast<unsigned>(trainerMirror),
+               static_cast<unsigned>(apps))) {
+    truncated = true;
+  }
+
+  if (!truncated) {
+    if (!appendf(out, OUT_BUF_SIZE, used,
+                 "hr_name=%s\npwr_name=%s\ncsc_name=%s\ntrainer_name=%s\n",
+                 hrName, pwrName, cscName, trainerName)) {
+      truncated = true;
+    }
+  }
+
+  if (truncated) {
+    appendf(out, OUT_BUF_SIZE, used, "truncated=1\n");
+  }
+  if (used >= OUT_BUF_SIZE) used = OUT_BUF_SIZE - 1;
+  out[used] = '\0';
+  sendResponse(request, 200, out);
+}
+
 // Maintenance endpoints (design §7.4: one-way until reboot)
 
 static void sendAdmitResult(AsyncWebServerRequest* request, hw::MaintAdmit admit, const char* job) {
@@ -1388,10 +1616,6 @@ void ApiActions::handleWifiReset(AsyncWebServerRequest* request) {
 }
 
 #if HW_ENABLE_NVS
-#include "../core/HeartRateSettings.h"
-// Forward declaration - will be set by App
-extern HeartRateSettings* g_heartRateSettings;
-
 // NOTE: handleHeartRateGet() removed - settings are now sent via WebSocket (HEART_RATE_SETTINGS frame)
 
 void ApiActions::handleHeartRateSetMin(AsyncWebServerRequest* request) {
@@ -1464,10 +1688,52 @@ void ApiActions::handleHeartRateSetMax(AsyncWebServerRequest* request) {
   }
 }
 
-#if HW_ENABLE_FAN_POWER_MODE
-#include "../core/FanModeSettings.h"
-extern FanModeSettings* g_fanModeSettings;
+// dir=up|down: up = more wind (lower HR range, −5 bpm), down = less wind (+5 bpm).
+// Same path as the Touch plus/minus; FanHRAdapter releases the Smart/Hybrid hold
+// when the range changes. 409 ERR:limit_min|limit_max when the step would cross 50/200.
+void ApiActions::handleFanStep(AsyncWebServerRequest* request) {
+  if (!checkSystemReady()) {
+    sendError(request, 503, "System not ready");
+    return;
+  }
+#if !HW_ENABLE_NVS
+  sendError(request, 503, "Heart rate settings not available");
+#else
+  if (!g_heartRateSettings) {
+    sendError(request, 503, "Heart rate settings not available");
+    return;
+  }
 
+  char dir[8];
+  if (!WebHelpers::getParamToBuffer(request, "dir", dir, sizeof(dir), true)) {
+    sendError(request, 400, "dir required (up|down)");
+    return;
+  }
+  int8_t steps = 0;
+  if (strcasecmp(dir, "up") == 0) {
+    steps = -1;  // plus / more wind
+  } else if (strcasecmp(dir, "down") == 0) {
+    steps = 1;   // minus / less wind
+  } else {
+    sendError(request, 400, "dir must be up or down");
+    return;
+  }
+
+  uint16_t newMin = 0;
+  uint16_t newMax = 0;
+  if (g_heartRateSettings->requestShift(steps, newMin, newMax)) {
+    char out[48];
+    snprintf(out, sizeof(out), "min=%u\nmax=%u\n", newMin, newMax);
+    sendResponse(request, 200, out);
+  } else if (MaintenanceMode::admissionClosed()) {
+    sendError(request, 409, "Maintenance active");
+  } else {
+    sendError(request, 409, steps < 0 ? "ERR:limit_min" : "ERR:limit_max");
+  }
+#endif
+}
+
+#if HW_ENABLE_FAN_POWER_MODE
 // mode: pure|smart|hybrid, ftp: watts (clamped to 100..500), cooldown: -2..2; all optional,
 // applied together.
 // Values are read back through the FAN_CONTROL frame.
@@ -1537,6 +1803,41 @@ void ApiActions::handleFanModeSet(AsyncWebServerRequest* request) {
     sendJSON(request, 409, "{\"ok\":false,\"error\":\"maintenance_active\"}");
   } else {
     sendError(request, 500, "Failed to set fan mode");
+  }
+}
+
+// Pure → Smart → Hybrid → Pure; skips Hybrid when hybridBlockReason() is set (same as Touch).
+void ApiActions::handleFanModeCycle(AsyncWebServerRequest* request) {
+  if (!checkSystemReady()) {
+    sendError(request, 503, "System not ready");
+    return;
+  }
+  if (!g_fanModeSettings) {
+    sendError(request, 503, "Fan mode settings not available");
+    return;
+  }
+
+  hw::FanMode next = hw::FanMode::Pure;
+  switch (g_fanModeSettings->mode()) {
+    case hw::FanMode::Pure:  next = hw::FanMode::Smart; break;
+    case hw::FanMode::Smart: next = hw::FanMode::Hybrid; break;
+    default:                 next = hw::FanMode::Pure; break;
+  }
+  if (next == hw::FanMode::Hybrid && FanModeSettings::hybridBlockReason()) {
+    next = hw::FanMode::Pure;
+  }
+
+  if (g_fanModeSettings->request(true, static_cast<uint8_t>(next), false, 0, false, 0)) {
+    const char* name = "pure";
+    if (next == hw::FanMode::Smart) name = "smart";
+    else if (next == hw::FanMode::Hybrid) name = "hybrid";
+    char out[32];
+    snprintf(out, sizeof(out), "mode=%s\n", name);
+    sendResponse(request, 200, out);
+  } else if (MaintenanceMode::admissionClosed()) {
+    sendError(request, 409, "Maintenance active");
+  } else {
+    sendError(request, 500, "Failed to cycle fan mode");
   }
 }
 #endif // HW_ENABLE_FAN_POWER_MODE

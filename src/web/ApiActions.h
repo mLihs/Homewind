@@ -42,6 +42,7 @@ private:
   static void handleFirmwareAbort(AsyncWebServerRequest* request);
   static void handleFirmwareStatus(AsyncWebServerRequest* request);
   static void handleSystemInfo(AsyncWebServerRequest* request);
+  static void handleState(AsyncWebServerRequest* request);
   static void handleSessionGet(AsyncWebServerRequest* request);
   static void handleUILockAcquire(AsyncWebServerRequest* request);
   static void handleUILockRelease(AsyncWebServerRequest* request);
@@ -55,8 +56,10 @@ private:
   // NOTE: handleHeartRateGet removed - settings now sent via WebSocket (HEART_RATE_SETTINGS frame)
   static void handleHeartRateSetMin(AsyncWebServerRequest* request);
   static void handleHeartRateSetMax(AsyncWebServerRequest* request);
+  static void handleFanStep(AsyncWebServerRequest* request);
 #if HW_ENABLE_FAN_POWER_MODE
   static void handleFanModeSet(AsyncWebServerRequest* request);
+  static void handleFanModeCycle(AsyncWebServerRequest* request);
 #endif
 #if HW_ENABLE_TRAINER_MIRROR
   static void handleTrainerSetup(AsyncWebServerRequest* request);

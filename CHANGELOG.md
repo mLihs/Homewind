@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.0] - 2026-11-22
+
+### Added
+
+- **`GET /api/v1/state`:** key=value status snapshot for the Karoo and other HTTP clients (mode/effective, fans, HR range, power/cadence with source flags, trainer, apps, sensor names). Does not use a WebSocket slot.
+- **`POST /api/v1/action/fan/step`:** `dir=up|down` shifts the HR range by 5 bpm (Touch plus/minus). `409 ERR:limit_min|limit_max` at the hard ends.
+- **`POST /api/v1/action/fanmode/cycle`:** Pure → Smart → Hybrid → Pure (skips Hybrid when blocked).
+
 ## [2.2.0] - 2026-11-22
 
 ### Added

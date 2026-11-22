@@ -73,6 +73,9 @@ Action POSTs (and `POST /api/v1/settings/set`) require header `X-Homewind: 1` or
 | POST | `/api/v1/action/fan/add` | Add fan by 32-hex token (`?token=`). Used by WebUI and by Token Extractor / external tools — see `docs/05_APIS.md` |
 | POST | `/api/v1/action/fan/update` | Replace a fan token (`old_token`, `new_token`) |
 | POST | `/api/v1/action/fan/control` | Control fan (Power, Speed, etc.) |
+| POST | `/api/v1/action/fan/step` | Shift HR range ±5 bpm (`dir=up|down`; up = more wind; since 2.3) |
+| POST | `/api/v1/action/fanmode/set` | Set fan mode / FTP / cooldown |
+| POST | `/api/v1/action/fanmode/cycle` | Cycle Pure → Smart → Hybrid → Pure (since 2.3) |
 | POST | `/api/v1/action/fan/discovery/start` | Start fan discovery |
 | POST | `/api/v1/action/fan/discovery/stop` | Stop fan discovery |
 | POST | `/api/v1/action/fan/remove` | Remove fan |
@@ -91,6 +94,7 @@ Action POSTs (and `POST /api/v1/settings/set`) require header `X-Homewind: 1` or
 | Method | Route | Description |
 |--------|-------|-------------|
 | GET | `/api/v1/system/info` | System info (`device_id`, `hostname` since 2.2; key=value) |
+| GET | `/api/v1/state` | Status snapshot for Karoo/HTTP clients (since 2.3; key=value) |
 | POST | `/api/v1/action/system/restart` | Restart device (settings preserved) |
 | POST | `/api/v1/action/system/wifi_reset` | WiFi reset (clear WiFi, reboot; WML only) |
 | POST | `/api/v1/action/system/factory_reset` | Factory reset (clear all, reboot) |

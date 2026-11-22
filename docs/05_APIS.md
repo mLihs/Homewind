@@ -529,6 +529,58 @@ truncated=1                    (if response was truncated)
 
 ---
 
+#### Status snapshot
+```
+GET /api/v1/state
+```
+HTTP status for Karoo and other clients that should not take a WebSocket slot (since 2.3).
+
+**Response**: `text/plain` key=value (768-byte buffer). Field order:
+```
+v=1
+mode=pure|smart|hybrid
+effective=pure|smart|hybrid
+fan_pct=<0-100>
+fans=<s0>,<s1>,<s2>,<s3>     # 0 empty, 1 on, 2 off, 3 error
+hr=<bpm>
+hr_min=<bpm>
+hr_max=<bpm>
+ftp=<watts>
+limit=none|min|max
+hr_sensor=1|0|-
+pwr_sensor=1|0|-
+csc_sensor=1|0|-
+power=<W>,<valid>,<from_trainer>
+cadence=<rpm>,<valid>,<from_power_meter>
+trainer=<state>,<mirror>     # TrainerState 0..6, mirror 0|1
+apps=<central count>
+hr_name=...
+pwr_name=...
+csc_name=...
+trainer_name=...
+```
+`*_sensor`: `1` connected, `0` disconnected, `-` not configured. Names are last (value to EOL). `effective` is the running mode (Hybrid without power/span becomes Smart). `limit`: plus lowers the range, minus raises it; `min`/`max` when a ±5 bpm step would cross 50/200.
+
+---
+
+#### Fan step (HR range shift)
+```
+POST /api/v1/action/fan/step?dir=up|down
+```
+Same path as Touch plus/minus (since 2.3). `up` = more wind (range −5 bpm), `down` = less wind (+5 bpm). Header `X-Homewind: 1` required.
+
+**Response**: `200` `min=<bpm>\nmax=<bpm>`; `409` `ERR:limit_min` / `ERR:limit_max` when the step would cross 50/200.
+
+#### Fan mode cycle
+```
+POST /api/v1/action/fanmode/cycle
+```
+Pure → Smart → Hybrid → Pure; skips Hybrid when not allowed (same as Touch long-press). Header `X-Homewind: 1`.
+
+**Response**: `200` `mode=pure|smart|hybrid`.
+
+---
+
 #### Device Restart
 ```
 POST /api/v1/action/system/restart
