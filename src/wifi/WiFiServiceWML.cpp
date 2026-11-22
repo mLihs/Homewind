@@ -9,12 +9,42 @@
 
 #include "WiFiServiceWML.h"
 #include "../core/DebugLog.h"
+#include "../core/DeviceIdentity.h"
 #include "../core/SystemState.h"
 #include "../core/MaintenanceMode.h"
 #include "../app/BuildInfo.h"
 #include <new>  // For placement-new
 #include <WiFi.h>
 #include <ESPmDNS.h>
+
+namespace {
+
+void fillIdentityHostname(char* out, size_t outLen) {
+  hw::formatHostname(out, outLen,
+                     static_cast<uint32_t>(ESP.getEfuseMac() & 0xFFFFFFFFu));
+}
+
+void fillDeviceId(char* out, size_t outLen) {
+  hw::formatDeviceId(out, outLen, ESP.getEfuseMac());
+}
+
+// wifiMangerLite already started mDNS; only add TXT and the dedicated service.
+void addMdnsIdentityRecords() {
+  char id[hw::kDeviceIdMax];
+  fillDeviceId(id, sizeof(id));
+  const char* idTxt = id;  // disambiguate MDNS addServiceTxt overloads
+  const char* version = BuildInfo::getVersion();
+  MDNS.addServiceTxt("http", "tcp", "id", idTxt);
+  MDNS.addServiceTxt("http", "tcp", "api", "1");
+  MDNS.addServiceTxt("http", "tcp", "version", version);
+  if (MDNS.addService("homewind", "tcp", 80)) {
+    MDNS.addServiceTxt("homewind", "tcp", "id", idTxt);
+    MDNS.addServiceTxt("homewind", "tcp", "api", "1");
+    MDNS.addServiceTxt("homewind", "tcp", "version", version);
+  }
+}
+
+}  // namespace
 
 // Static instances for wifiMangerLite components
 // These live for the entire program lifetime
@@ -68,38 +98,15 @@ void WiFiServiceWML::begin(AsyncWebServer* server) {
     HW_DEBUG_PRINTF("[WiFiWML]   SSID: %s\n", config.primary.ssid);
     HW_DEBUG_PRINTF("[WiFiWML]   deviceName (from NVS): %s\n", config.deviceName);
     
-    // Migration check: If deviceName doesn't start with our identity base (lowercase),
-    // it's a stale value from an older install or ESP default. Fix it once and re-save.
-    const String identityHostname = wifiManager->getIdentityNameWithMac();
-    char expectedPrefix[32];
-    strncpy(expectedPrefix, HW_WIFI_IDENTITY_BASE, sizeof(expectedPrefix) - 1);
-    expectedPrefix[sizeof(expectedPrefix) - 1] = '\0';
-    // Convert to lowercase for comparison
-    for (size_t i = 0; expectedPrefix[i]; i++) {
-      if (expectedPrefix[i] >= 'A' && expectedPrefix[i] <= 'Z') {
-        expectedPrefix[i] = expectedPrefix[i] + ('a' - 'A');
-      }
-    }
-    
-    // Check if current deviceName starts with expected prefix (e.g., "homewind")
-    bool needsMigration = (strncmp(config.deviceName, expectedPrefix, strlen(expectedPrefix)) != 0);
-    
-    if (needsMigration && identityHostname.length() > 0) {
-      HW_DEBUG_PRINTF("[WiFiWML]   deviceName needs migration (doesn't start with '%s')\n", expectedPrefix);
-      
-      // Build correct hostname (lowercase)
-      char hostnameBuf[64];
-      strncpy(hostnameBuf, identityHostname.c_str(), sizeof(hostnameBuf) - 1);
-      hostnameBuf[sizeof(hostnameBuf) - 1] = '\0';
-      for (size_t i = 0; hostnameBuf[i]; i++) {
-        if (hostnameBuf[i] >= 'A' && hostnameBuf[i] <= 'Z') {
-          hostnameBuf[i] = hostnameBuf[i] + ('a' - 'A');
-        }
-      }
+    // Migration: stale names (ESP default, old casing) → homewind-xxxxxxxx
+    char hostnameBuf[hw::kHostnameMax];
+    fillIdentityHostname(hostnameBuf, sizeof(hostnameBuf));
+    const bool needsMigration =
+        hostnameBuf[0] != '\0' && strcmp(config.deviceName, hostnameBuf) != 0;
+    if (needsMigration) {
+      HW_DEBUG_PRINTF("[WiFiWML]   deviceName needs migration (was '%s')\n", config.deviceName);
       config.setDeviceName(hostnameBuf);
       HW_DEBUG_PRINTF("[WiFiWML]   deviceName migrated to: %s\n", config.deviceName);
-      
-      // Re-save to NVS so migration only happens once
       if (configProvider->updateConfig(config)) {
         HW_DEBUG_PRINTLN("[WiFiWML]   Migration saved to NVS");
       }
@@ -128,26 +135,8 @@ void WiFiServiceWML::begin(AsyncWebServer* server) {
       case WML::Event::Connected:
         HW_DEBUG_PRINTF("[WiFiWML] Connected to: %s\n", info.c_str());
         HW_DEBUG_PRINTF("[WiFiWML]   IP: %s\n", ipString());
-        {
-          // Build the correct hostname: "homewind-XXXXXXXX" (lowercase)
-          // Use ESP MAC directly to ensure consistency
-          const uint32_t mac32 = static_cast<uint32_t>(ESP.getEfuseMac() & 0xFFFFFFFFu);
-          char hostnameBuf[64];
-          snprintf(hostnameBuf, sizeof(hostnameBuf), "%s-%08lx", HW_WIFI_HOSTNAME, static_cast<unsigned long>(mac32));
-          
-          HW_DEBUG_PRINTF("[WiFiWML]   Setting mDNS hostname: %s\n", hostnameBuf);
-          
-          // Stop any existing mDNS
-          MDNS.end();
-          
-          // Start mDNS with our hostname
-          if (MDNS.begin(hostnameBuf)) {
-            MDNS.addService("http", "tcp", 80);
-            HW_DEBUG_PRINTF("[WiFiWML]   mDNS started: %s.local\n", hostnameBuf);
-          } else {
-            HW_DEBUG_PRINTLN("[WiFiWML]   ERROR: Failed to start mDNS!");
-          }
-        }
+        // wifiMangerLite already started mDNS once; only add identity TXT.
+        addMdnsIdentityRecords();
         SystemState::setWiFiReady(true);
         SystemState::setStationOnline(true);
         break;
@@ -200,6 +189,7 @@ void WiFiServiceWML::begin(AsyncWebServer* server) {
   if (wifiManager->isConnected()) {
     SystemState::setWiFiReady(true);
     SystemState::setStationOnline(true);
+    addMdnsIdentityRecords();
     HW_DEBUG_PRINTF("[WiFiWML] Already connected, IP: %s\n", ipString());
   } else if (wifiManager->isAPMode()) {
     SystemState::setWiFiReady(true);
@@ -251,19 +241,9 @@ void WiFiServiceWML::setupCallbacks() {
     // Make a mutable copy to fix the deviceName before saving
     WML::Config configToSave = newConfig;
     
-    // Ensure deviceName is set to the correct identity hostname (lowercase)
-    // This prevents stale/default names like "esp32s3-DABB8C" from being saved
-    const String identityHostname = wifiManager->getIdentityNameWithMac();
-    if (identityHostname.length() > 0) {
-      char hostnameBuf[64];
-      strncpy(hostnameBuf, identityHostname.c_str(), sizeof(hostnameBuf) - 1);
-      hostnameBuf[sizeof(hostnameBuf) - 1] = '\0';
-      // Convert to lowercase (mDNS hostnames should be lowercase)
-      for (size_t i = 0; hostnameBuf[i]; i++) {
-        if (hostnameBuf[i] >= 'A' && hostnameBuf[i] <= 'Z') {
-          hostnameBuf[i] = hostnameBuf[i] + ('a' - 'A');
-        }
-      }
+    char hostnameBuf[hw::kHostnameMax];
+    fillIdentityHostname(hostnameBuf, sizeof(hostnameBuf));
+    if (hostnameBuf[0] != '\0') {
       configToSave.setDeviceName(hostnameBuf);
       HW_DEBUG_PRINTF("[WiFiWML]   deviceName set to: %s\n", configToSave.deviceName);
     }

@@ -90,7 +90,7 @@ Action POSTs (and `POST /api/v1/settings/set`) require header `X-Homewind: 1` or
 
 | Method | Route | Description |
 |--------|-------|-------------|
-| GET | `/api/v1/system/info` | Get system information |
+| GET | `/api/v1/system/info` | System info (`device_id`, `hostname` since 2.2; key=value) |
 | POST | `/api/v1/action/system/restart` | Restart device (settings preserved) |
 | POST | `/api/v1/action/system/wifi_reset` | WiFi reset (clear WiFi, reboot; WML only) |
 | POST | `/api/v1/action/system/factory_reset` | Factory reset (clear all, reboot) |

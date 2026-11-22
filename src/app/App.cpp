@@ -34,6 +34,7 @@
 
 #if HW_ENABLE_WIFI
   #include <WiFi.h>  // Required for WiFi.mode() in all backends
+  #include "../core/DeviceIdentity.h"
   #if HW_WIFI_BACKEND_FIXED
     #include "../wifi/WiFiService.h"
   #elif HW_WIFI_BACKEND_WML
@@ -753,6 +754,12 @@ void App::initWiFi() {
   // ESPAsyncWebServer requires WiFi.mode() to be set, otherwise FreeRTOS 
   // semaphore assertions fail.
   HW_DEBUG_PRINTLN("[App] WiFi (WML) pre-init: setting WiFi mode...");
+  // Hostname must be set before the first WiFi.mode(STA): the core copies it
+  // into the STA netif only when STA starts (DHCP option 12).
+  char hostname[hw::kHostnameMax];
+  hw::formatHostname(hostname, sizeof(hostname),
+                     static_cast<uint32_t>(ESP.getEfuseMac() & 0xFFFFFFFFu));
+  WiFi.setHostname(hostname);
   // Use STA-only here to avoid early AP+STA allocations/fragmentation.
   // wifiMangerLite will switch to WIFI_AP_STA later if it actually enters AP mode.
   WiFi.mode(WIFI_STA);

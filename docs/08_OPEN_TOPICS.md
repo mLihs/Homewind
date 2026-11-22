@@ -91,6 +91,12 @@ This document tracks TODOs, known issues, planned features, and open questions.
 
 ### WiFi Management
 
+#### TODO: DHCP Hostname and mDNS Discovery
+- **Issue**: Router lists the device as `esp32s3-XXXXXX` instead of `homewind-xxxxxxxx` (hostname set after the STA netif is started); mDNS is restarted twice per connect and carries no device ID, so clients like the Karoo extension cannot identify Homewind reliably
+- **Impact**: Wrong name in the router; LAN clients that depend on mDNS for every connect see Homewind as offline
+- **Priority**: Medium
+- **Plan**: [AGENT_NETWORK_REACHABILITY.md](./AGENT_NETWORK_REACHABILITY.md) — target 2.2: ARP measurement, hostname fix, mDNS once with TXT `id`, `device_id`/`hostname` in `system/info` (~2.5–3 days, no BLE impact); gratuitous ARP only if the measurement confirms ARP loss
+
 #### Compile-Time Credentials Only
 - **Issue**: WiFi credentials are compile-time only (no runtime configuration)
 - **Impact**: Cannot change WiFi credentials without recompiling

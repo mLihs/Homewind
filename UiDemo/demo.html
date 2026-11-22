@@ -327,11 +327,20 @@ window.fetch = function(url, options = {}) {
   
   // Mock API responses
   if (url.includes('/api/v1/system/info')) {
-    return Promise.resolve(new Response(JSON.stringify({
-      version: DemoState.firmware.version,
-      heap: 180000,
-      uptime: 3600
-    })));
+    const body = [
+      'name=Homewind',
+      `version=${DemoState.firmware.version}`,
+      'build_id=demo',
+      'uptime_ms=3600000',
+      'free_heap=180000',
+      'largest_free_block=65536',
+      'ready=1',
+      'device_id=aabbccddeeff',
+      'hostname=homewind-ccddeeff',
+      'board=V1',
+      'te_pulses=0',
+    ].join('\n') + '\n';
+    return Promise.resolve(new Response(body, { headers: { 'Content-Type': 'text/plain' } }));
   }
   
   if (url.includes('/api/v1/sensors')) {

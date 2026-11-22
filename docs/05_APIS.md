@@ -518,10 +518,14 @@ uptime_ms=<milliseconds>
 free_heap=<bytes>
 largest_free_block=<bytes>
 ready=<0|1>
+device_id=<12-hex MAC>         (full eFuse MAC, lowercase)
+hostname=homewind-<8 hex>      (same as DHCP / mDNS name)
+board=<V1|V1.1>                (Touch only)
+te_pulses=<n>                  (Touch only)
 truncated=1                    (if response was truncated)
 ```
 
-**Note**: Response uses fixed-size buffer (512 bytes) for deterministic memory usage
+**Note**: Response uses fixed-size buffer (512 bytes) for deterministic memory usage. `device_id` and `hostname` since 2.2.
 
 ---
 

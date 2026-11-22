@@ -178,6 +178,14 @@ Idea only, not planned; not yet listed in `docs/08_OPEN_TOPICS.md`.
   Concept2 PM5 (firmware > 150) and Domyos rowers offer FTMS.
 - **Priority**: Lowest
 
+## 5. Network — DHCP hostname, mDNS identity, ARP check — done in 2.2.0
+
+Plan: `docs/AGENT_NETWORK_REACHABILITY.md`. Client counterpart:
+`Homewind-Bike-Computer/docs/HOMEWIND_DISCOVERY.md` (Karoo extension 0.4.1).
+Shipped: hostname before `WiFi.mode(STA)`, mDNS once with TXT + `_homewind._tcp`,
+`device_id`/`hostname` in `system/info`. Task 0 measured on Touch (BLE + app):
+ARP loss refuted; Task 4 not shipped.
+
 ---
 
 ## Report format per feature

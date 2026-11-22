@@ -14,6 +14,7 @@
 #include <strings.h>
 #include "../core/SystemState.h"
 #include "../core/TextUtil.h"
+#include "../core/DeviceIdentity.h"
 #include "../app/BuildInfo.h"
 #include "../core/DebugLog.h"
 #include "../core/MaintenanceMode.h"
@@ -1227,8 +1228,8 @@ void ApiActions::handleFirmwareStatus(AsyncWebServerRequest* request) {
 
 void ApiActions::handleSystemInfo(AsyncWebServerRequest* request) {
   // System info endpoint (read-only)
-  // Returns: name, version, build_id, uptime, free_heap (+ board, te_pulses with display)
-  // Fixed-size buffer for deterministic response (no heap allocation)
+  // Returns: name, version, build_id, uptime, free_heap, device_id, hostname
+  // (+ board, te_pulses with display). Fixed 512-byte buffer.
   static const size_t OUT_BUF_SIZE = 512;
   static_assert(OUT_BUF_SIZE >= 512, "Buffer must be at least 512 bytes");
   char out[OUT_BUF_SIZE];
@@ -1244,6 +1245,13 @@ void ApiActions::handleSystemInfo(AsyncWebServerRequest* request) {
   const char* version = BuildInfo::getVersion();
   char versionBuf[33];
   truncate_ascii(versionBuf, sizeof(versionBuf), version, 32, false);
+
+  char deviceId[hw::kDeviceIdMax];
+  char hostname[hw::kHostnameMax];
+  const uint64_t mac = ESP.getEfuseMac();
+  hw::formatDeviceId(deviceId, sizeof(deviceId), mac);
+  hw::formatHostname(hostname, sizeof(hostname),
+                     static_cast<uint32_t>(mac & 0xFFFFFFFFu));
   
   if (!appendf(out, OUT_BUF_SIZE, used, "name=%s\nversion=%s\nbuild_id=%s\n",
                BuildInfo::getName(), versionBuf, buildIdBuf)) {
@@ -1256,6 +1264,13 @@ void ApiActions::handleSystemInfo(AsyncWebServerRequest* request) {
                  SystemState::getFreeHeap(),
                  SystemState::getLargestFreeBlock(),
                  SystemState::isReady() ? 1 : 0)) {
+      truncated = true;
+    }
+  }
+
+  if (!truncated) {
+    if (!appendf(out, OUT_BUF_SIZE, used, "device_id=%s\nhostname=%s\n",
+                 deviceId, hostname)) {
       truncated = true;
     }
   }

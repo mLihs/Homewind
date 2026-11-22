@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-11-22
+
+### Added
+
+- **Network identity:** DHCP hostname `homewind-xxxxxxxx` set before `WiFi.mode(STA)` so the router lists Homewind by name; mDNS started once by wifiMangerLite (no `end()`/`begin()` on connect) with TXT `id`/`api`/`version` on `_http._tcp` and `_homewind._tcp`; `GET /api/v1/system/info` adds `device_id` (12-hex MAC) and `hostname`. ARP loss under BLE was measured and refuted (no gratuitous ARP). See `docs/AGENT_NETWORK_REACHABILITY.md`. For the Karoo extension (device ID / discovery).
+
 ## [2.1.1] - 2026-11-21
 
 ### Fixed
