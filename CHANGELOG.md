@@ -9,9 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.3.0] - 2026-11-22
 
+For the **Karoo 3 Homewind App** (Bike Computer ≥ 0.5.0): status and fan control over HTTP so the extension no longer needs a WebSocket slot. Older firmware (2.0/2.1) still works via the app’s WebSocket fallback when `/api/v1/state` returns 404.
+
 ### Added
 
-- **`GET /api/v1/state`:** key=value status snapshot for the Karoo and other HTTP clients (mode/effective, fans, HR range, power/cadence with source flags, trainer, apps, sensor names). Does not use a WebSocket slot.
+- **`GET /api/v1/state`:** key=value status snapshot for the Karoo 3 Homewind App and other HTTP clients (mode/effective, fans, HR range, power/cadence with source flags, trainer, apps, sensor names). Does not use a WebSocket slot.
 - **`POST /api/v1/action/fan/step`:** `dir=up|down` shifts the HR range by 5 bpm (Touch plus/minus). `409 ERR:limit_min|limit_max` at the hard ends.
 - **`POST /api/v1/action/fanmode/cycle`:** Pure → Smart → Hybrid → Pure (skips Hybrid when blocked).
 
