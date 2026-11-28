@@ -15,10 +15,18 @@
 #if HW_ENABLE_NVS
 #include <Preferences.h>
 
+/** Result of HeartRateSettings::requestShift (Touch ± / fan/step). */
+enum class HrShiftResult : uint8_t {
+  Applied = 0,   /**< Range queued */
+  LimitMin = 1,  /**< Plus blocked: would go below HARD_MIN */
+  LimitMax = 2,  /**< Minus blocked: would go above HARD_MAX */
+  Rejected = 3,  /**< Not ready or maintenance admission closed */
+};
+
 /**
  * @class HeartRateSettings
  * @brief Manages heart rate min/max settings with NVS persistence
- * 
+ *
  * Stores heart rate range settings in NVS using direct Preferences API.
  * Uses deterministic struct-based storage with CRC16 validation.
  * Zero heap allocation during load/save operations.
@@ -66,10 +74,20 @@ public:
   /**
    * Queue a shift of min and max by steps × SHIFT_STEP bpm (any task; touch plus/minus).
    * The span stays; a shift that would cross HARD_MIN or HARD_MAX is rejected.
-   * @param outMin, outMax Range loop() will apply (unchanged when rejected)
-   * @return false if rejected, not initialized or maintenance admission is closed
+   * @param outMin, outMax Range loop() will apply (unchanged when limit/rejected)
+   * @return Applied, LimitMin (plus), LimitMax (minus), or Rejected
    */
-  bool requestShift(int8_t steps, uint16_t& outMin, uint16_t& outMax);
+  HrShiftResult requestShift(int8_t steps, uint16_t& outMin, uint16_t& outMax);
+
+  /**
+   * Plus (lower range) blocked for the next −SHIFT_STEP step (pending if queued).
+   */
+  bool plusAtLimit() const;
+
+  /**
+   * Minus (raise range) blocked for the next +SHIFT_STEP step (pending if queued).
+   */
+  bool minusAtLimit() const;
   
   /**
    * Loop task: apply the queued range at once and mark HEART_RATE_SETTINGS dirty.
@@ -148,7 +166,7 @@ private:
   bool _initialized;
   
   // Pending range (any task writes under the mux, loop() applies)
-  portMUX_TYPE _mux;
+  mutable portMUX_TYPE _mux;
   bool _pendingValid;
   uint16_t _pendingMin;
   uint16_t _pendingMax;

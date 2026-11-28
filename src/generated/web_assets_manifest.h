@@ -36,7 +36,7 @@ static const WebAsset WEB_ASSETS[] PROGMEM = {
     .len = webui_index_html_len,
     .gzipped = true,
     .mime_type = "text/html",
-    .etag = "\"9fac1951\"",
+    .etag = "\"f691824c\"",
     .cacheSeconds = 0
   }
 };
@@ -49,6 +49,6 @@ static const size_t WEB_ASSETS_COUNT = 1;
 /**
  * @brief WebUI build hash (also in index.html as data-webui-build)
  */
-#define HOMEWIND_WEBUI_BUILD_HASH "562b0280"
+#define HOMEWIND_WEBUI_BUILD_HASH "2666928f"
 
 #endif // HOMEWIND_WEB_ASSETS_MANIFEST_H

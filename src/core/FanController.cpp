@@ -100,19 +100,19 @@ bool FanController::begin() {
   if (!_reqMux) _reqMux = xSemaphoreCreateMutex();
 #endif
 
-  if (!SmartMiFan::begin(_fanUdp)) {
-    HW_ERROR_PRINTLN("[Fans] SmartMiFan::begin failed");
+  if (!FanBus::begin()) {
+    HW_ERROR_PRINTLN("[Fans] FanBus::begin failed");
     return false;
   }
-  SmartMiFan::setEventCallback(&FanController::onLibraryEvent);
+  FanBus::setEventCallback(&FanController::onLibraryEvent);
   s_fanControllerSelf = this;
 
   if (!loadFansFromNVS()) {
     HW_DEBUG_PRINTLN("[Fans] No fans in NVS");
     _fanCount = 0;
   }
-  SmartMiFan::setHandshakeTtl(_handshakeTtlS);
-  SmartMiFan::clear();
+  FanBus::setHandshakeTtl(_handshakeTtlS);
+  FanBus::clear();
   syncEnabledToLibrary();
 
   if (_fanCount > 0) startSmartConnect();
@@ -129,12 +129,12 @@ void FanController::loop() {
   if (!initialized || _maintenanceStopped) return;
   if (_nvsDirty.exchange(false)) saveFansToNVS();
   drainQueue();
-  SmartMiFan::update();
+  FanBus::update();
   if (_postConnectStep != PostConnectStep::IDLE) updatePostConnectionControl();
   if (_cleanupPending) {
     const unsigned long elapsed = millis() - _cleanupStartMs;
     if ((_cleanupSpeedDone && _cleanupPowerDone) || elapsed >= 4000) {
-      SmartMiFan::remove(_cleanupIndex);
+      FanBus::remove(_cleanupIndex);
       _cleanupPending = false;
       _cleanupIndex = 0xFF;
     }
@@ -149,8 +149,10 @@ void FanController::stopForMaintenance() {
   // loop() no longer runs after this: persist the last applied fan change.
   if (_nvsDirty.exchange(false)) saveFansToNVS();
   // No wait for pending commands: the maintenance budget is 15 s in total (§7.4).
-  // prepareForSleep() cancels the active waves itself.
-  SmartMiFan::prepareForSleep(true);
+  // prepareForSleep() cancels the active waves itself; end() releases the
+  // FanCommon arena (maintenance exits via reboot, no warm re-begin).
+  FanBus::prepareForSleep(true);
+  FanBus::end();
   clearSeqWaiters();
   HW_DEBUG_PRINTLN("[Fans] Stopped for maintenance");
 }
@@ -287,27 +289,27 @@ void FanController::drainQueue() {
         }
         _nvsDirty = true;
         markTelemetryDirty();
-        SmartMiFan::setEnabled(r.index, r.value != 0);
+        FanBus::setEnabled(r.index, r.value != 0);
         if (!r.value) {
-          SmartMiFan::setPower(r.index, false);
+          FanBus::setPower(r.index, false);
         } else {
           SmartMiFanInfo info;
-          if (!SmartMiFan::info(r.index, info) || !info.ready) {
+          if (!FanBus::info(r.index, info) || !info.ready) {
             if (_autoRecoveryExhausted[r.index]) {
-              if (!SmartMiFan::connecting() && !SmartMiFan::discovering()) {
+              if (!FanBus::connecting() && !FanBus::discovering()) {
                 enqueue(FanReqType::SMART_CONNECT, r.index, 0);
               }
             } else {
-              SmartMiFan::handshake(r.index);
+              FanBus::handshake(r.index);
             }
           }
         }
         break;
       case FanReqType::SET_SPEED:
-        SmartMiFan::setSpeed(r.index, r.value);
+        FanBus::setSpeed(r.index, r.value);
         break;
       case FanReqType::SET_POWER:
-        SmartMiFan::setPower(r.index, r.value != 0);
+        FanBus::setPower(r.index, r.value != 0);
         break;
       case FanReqType::REMOVE_CLEANUP:
         if (!_fans[r.index].used || !_fans[r.index].tokenEquals(r.token)) break;
@@ -320,8 +322,8 @@ void FanController::drainQueue() {
         _cleanupPending = true;
         _cleanupSpeedDone = false;
         _cleanupPowerDone = false;
-        SmartMiFan::setSpeed(r.index, 1);
-        SmartMiFan::setPower(r.index, false);
+        FanBus::setSpeed(r.index, 1);
+        FanBus::setPower(r.index, false);
         break;
       case FanReqType::ADD_SLOT: {
         if (findFanIndex(String(r.token)) >= 0) break;
@@ -340,8 +342,8 @@ void FanController::drainQueue() {
         _nvsDirty = true;
         markTelemetryDirty();
         const uint8_t slot = static_cast<uint8_t>(place);
-        SmartMiFan::add(slot, "0.0.0.0", fan.token, nullptr);
-        SmartMiFan::setEnabled(slot, true);
+        FanBus::add(slot, "0.0.0.0", fan.token, nullptr);
+        FanBus::setEnabled(slot, true);
         startDiscoveryForIndex(slot, false);
         break;
       }
@@ -352,9 +354,9 @@ void FanController::drainQueue() {
         _fans[r.index].model[0] = '\0';
         _nvsDirty = true;
         markTelemetryDirty();
-        SmartMiFan::remove(r.index);
-        SmartMiFan::add(r.index, "0.0.0.0", _fans[r.index].token, nullptr);
-        SmartMiFan::setEnabled(r.index, _fans[r.index].enabled);
+        FanBus::remove(r.index);
+        FanBus::add(r.index, "0.0.0.0", _fans[r.index].token, nullptr);
+        FanBus::setEnabled(r.index, _fans[r.index].enabled);
         startDiscoveryForIndex(r.index, false);
         break;
       case FanReqType::SMART_CONNECT:
@@ -369,7 +371,7 @@ uint8_t FanController::getConnectedFanCount() const {
   for (uint8_t i = 0; i < MAX_FANS; ++i) {
     if (!_fans[i].used) continue;
     SmartMiFanInfo info;
-    if (SmartMiFan::info(i, info) && info.ready) n++;
+    if (FanBus::info(i, info) && info.ready) n++;
   }
   return n;
 }
@@ -387,14 +389,8 @@ bool FanController::getFanConfigByToken(const String& token, FanConfig& config) 
   return true;
 }
 
-bool FanController::getDiscoveredFans(SmartMiFanInfo* fans, size_t& count) const {
-  if (!fans) return false;
-  count = 0;
-  for (uint8_t i = 0; i < MAX_FANS; ++i) {
-    SmartMiFanInfo info;
-    if (SmartMiFan::info(i, info)) fans[count++] = info;
-  }
-  return true;
+size_t FanController::getDiscoveredFans(FanSlotView* fans, size_t cap) const {
+  return FanBus::copyUsedSlots(fans, cap);
 }
 
 void FanController::markTelemetryDirty() {
@@ -414,7 +410,7 @@ uint8_t FanController::getFanRecoveryUiState(uint8_t index) const {
 }
 
 bool FanController::isFanActiveForHr(uint8_t index) const {
-  return (SmartMiFan::participating() & static_cast<FanMask>(1u << index)) != 0;
+  return (FanBus::participating() & static_cast<FanMask>(1u << index)) != 0;
 }
 
 bool FanController::isPostConnectDone() const {
@@ -432,7 +428,7 @@ bool FanController::setPostConnectSpeed(uint8_t speed, bool persist) {
 bool FanController::setHandshakeTtlS(uint32_t seconds, bool persist) {
   if (seconds > 255) seconds = 255;
   _handshakeTtlS = seconds;
-  SmartMiFan::setHandshakeTtl(_handshakeTtlS);
+  FanBus::setHandshakeTtl(_handshakeTtlS);
   return persist ? saveFansToNVS() : true;
 }
 
@@ -531,26 +527,26 @@ void FanController::syncEnabledToLibrary() {
     if (!_fans[i].used) continue;
     char ipBuf[16];
     ipToBuffer(_fans[i].ip, ipBuf, sizeof(ipBuf));
-    SmartMiFan::add(i, ipBuf, _fans[i].token, _fans[i].model[0] ? _fans[i].model : nullptr);
-    SmartMiFan::setEnabled(i, _fans[i].enabled);
-    SmartMiFan::setSoftActive(i, _softActive[i]);
+    FanBus::add(i, ipBuf, _fans[i].token, _fans[i].model[0] ? _fans[i].model : nullptr);
+    FanBus::setEnabled(i, _fans[i].enabled);
+    FanBus::setSoftActive(i, _softActive[i]);
   }
 }
 
 void FanController::startDiscoveryForIndex(uint8_t index, bool recovery) {
   if (index >= MAX_FANS || !_fans[index].used) return;
-  if (SmartMiFan::connecting()) return;
+  if (FanBus::connecting()) return;
   _discoveryIsRecovery = recovery;
   _discoveryRecoveryNvsIndex = recovery ? static_cast<int>(index) : -1;
-  SmartMiFan::discover(static_cast<FanMask>(1u << index), HW_FAN_DISCOVERY_TIMEOUT_MS);
+  FanBus::discover(static_cast<FanMask>(1u << index), HW_FAN_DISCOVERY_TIMEOUT_MS);
 }
 
 void FanController::startSmartConnect() {
   if (_fanCount == 0) return;
-  if (SmartMiFan::commandPending()) SmartMiFan::cancel();
-  SmartMiFan::clear();
+  if (FanBus::commandPending()) FanBus::cancel();
+  FanBus::clear();
   syncEnabledToLibrary();
-  _connectInProgress = SmartMiFan::connect(HW_FAN_SMART_CONNECT_TIMEOUT_MS);
+  _connectInProgress = FanBus::connect(HW_FAN_SMART_CONNECT_TIMEOUT_MS);
 }
 
 void FanController::startPostConnectionControl() {
@@ -565,7 +561,7 @@ void FanController::updatePostConnectionControl() {
   const unsigned long elapsed = millis() - _postConnectStepStartTime;
   switch (_postConnectStep) {
     case PostConnectStep::POWER_ON: {
-      const CmdAccept acc = SmartMiFan::setPowerAll(true, Scope::ALL);
+      const CmdAccept acc = FanBus::setPowerAll(true, Scope::ALL);
       if (acc.result == CmdResult::REJECTED) {
         _postConnectStep = PostConnectStep::DONE;
         break;
@@ -578,7 +574,7 @@ void FanController::updatePostConnectionControl() {
       if (_postConnectSeq == 0 && elapsed >= 500) _postConnectStep = PostConnectStep::SET_SPEED;
       break;
     case PostConnectStep::SET_SPEED: {
-      const CmdAccept acc = SmartMiFan::setSpeedAll(_postConnectSpeed, Scope::ALL);
+      const CmdAccept acc = FanBus::setSpeedAll(_postConnectSpeed, Scope::ALL);
       _postConnectSeq = (acc.result == CmdResult::REJECTED) ? 0 : acc.seq;
       _postConnectStep = PostConnectStep::WAIT_RUN;
       _postConnectStepStartTime = millis();
@@ -589,7 +585,7 @@ void FanController::updatePostConnectionControl() {
       break;
     case PostConnectStep::POWER_OFF: {
       if (_postConnectSeq != 0) break;
-      const CmdAccept acc = SmartMiFan::setPowerAll(false, Scope::ALL);
+      const CmdAccept acc = FanBus::setPowerAll(false, Scope::ALL);
       if (acc.result == CmdResult::REJECTED) {
         _postConnectStep = PostConnectStep::DONE;
         break;
@@ -664,7 +660,7 @@ void FanController::handleEvent(const EventInfo& ev) {
         _autoRecoveryAttempts[ev.fanIndex] = 0;
         _unhealthyStreak[ev.fanIndex] = 0;
         _softActive[ev.fanIndex] = false;
-        SmartMiFan::setSoftActive(static_cast<uint8_t>(ev.fanIndex), false);
+        FanBus::setSoftActive(static_cast<uint8_t>(ev.fanIndex), false);
       }
       markTelemetryDirty();
       break;
@@ -674,7 +670,7 @@ void FanController::handleEvent(const EventInfo& ev) {
     case EventType::FAN_INFO:
       if (ev.fanIndex >= 0 && ev.fanIndex < MAX_FANS) {
         SmartMiFanInfo info;
-        if (SmartMiFan::info(static_cast<uint8_t>(ev.fanIndex), info)) {
+        if (FanBus::info(static_cast<uint8_t>(ev.fanIndex), info)) {
           _fans[ev.fanIndex].ip = info.ip;
           strncpy(_fans[ev.fanIndex].model, info.model, sizeof(_fans[ev.fanIndex].model) - 1);
           saveFansToNVS();
@@ -723,13 +719,13 @@ void FanController::onConnectOrDiscoveryDone(const EventInfo& ev) {
   for (uint8_t i = 0; i < MAX_FANS; ++i) {
     if ((ev.okMask & static_cast<FanMask>(1u << i)) == 0) continue;
     SmartMiFanInfo info;
-    if (!SmartMiFan::info(i, info) || !_fans[i].used) continue;
+    if (!FanBus::info(i, info) || !_fans[i].used) continue;
     if (_fans[i].ip != info.ip || strcmp(_fans[i].model, info.model) != 0) {
       _fans[i].ip = info.ip;
       strncpy(_fans[i].model, info.model, sizeof(_fans[i].model) - 1);
       dirty = true;
     }
-    SmartMiFan::setEnabled(i, _fans[i].enabled);
+    FanBus::setEnabled(i, _fans[i].enabled);
   }
   if (dirty) saveFansToNVS();
 }
@@ -739,12 +735,12 @@ void FanController::updateAutoRecovery() {
   for (uint8_t i = 0; i < MAX_FANS; ++i) {
     if (!_fans[i].used || !_fans[i].enabled) continue;
     SmartMiFanInfo info;
-    if (!SmartMiFan::info(i, info)) continue;
+    if (!FanBus::info(i, info)) continue;
     const bool unhealthy = !info.ready || info.lastError != MiioErr::OK;
     if (!unhealthy) {
       _unhealthyStreak[i] = 0;
       _softActive[i] = false;
-      SmartMiFan::setSoftActive(i, false);
+      FanBus::setSoftActive(i, false);
       continue;
     }
     if (_lastUnhealthyCheckMs[i] != 0 &&
@@ -755,7 +751,7 @@ void FanController::updateAutoRecovery() {
     if (_unhealthyStreak[i] < 255) _unhealthyStreak[i]++;
     if (_unhealthyStreak[i] >= 1 && _unhealthyStreak[i] < HW_FAN_AUTO_RECOVERY_UNHEALTHY_CHECKS) {
       _softActive[i] = true;
-      SmartMiFan::setSoftActive(i, true);
+      FanBus::setSoftActive(i, true);
     }
     if (_unhealthyStreak[i] < HW_FAN_AUTO_RECOVERY_UNHEALTHY_CHECKS) continue;
     if (_autoRecoveryExhausted[i]) continue;
@@ -768,7 +764,7 @@ void FanController::updateAutoRecovery() {
       _autoRecoveryActive[i] = false;
       continue;
     }
-    if (SmartMiFan::connecting()) continue;
+    if (FanBus::connecting()) continue;
     _lastAutoRecoveryAttemptMs[i] = now;
     _autoRecoveryAttempts[i]++;
     _autoRecoveryActive[i] = true;

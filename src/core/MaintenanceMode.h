@@ -67,6 +67,9 @@ namespace MaintenanceMode {
   const char* reasonString();
   const char* stateString();
   const char* resultString();
+  /** Step active at failure (`idle` if not failed). */
+  const char* failedStepString();
+  uint32_t failedElapsedMs();
 
   bool restartRequired();
   void setRestartRequired();

@@ -48,7 +48,7 @@ Diese Seite beschreibt den **Datenfluss vom und zum UI** für die zentralen Funk
 | Quelle | WebSocket-Frame | Inhalt | Verwendung im UI |
 |--------|----------------|--------|------------------|
 | HR-Änderung (vom Sensor) | `HEART_RATE` (0x06) | `[value:uint16]` (BPM, LE) | Anzeige aktueller Puls |
-| Snapshot / nach Connect | `HEART_RATE_SETTINGS` (0x0B) | `[min:uint16][max:uint16]` (LE) | Min-/Max-Slider; es gibt **kein** HTTP GET für HR-Settings mehr – nur WebSocket. |
+| Snapshot / nach Connect | `HEART_RATE_SETTINGS` (0x0B) | `[min:uint16][max:uint16][flags:uint8]` (LE; flags seit 2.4.0) | Min-/Max-Slider; es gibt **kein** HTTP GET für HR-Settings mehr – nur WebSocket. |
 
 **Referenz:** [05_APIS.md](./05_APIS.md) (HEART_RATE, HEART_RATE_SETTINGS), [WEBSOCKET_PROTOCOL.md](../src/web/WEBSOCKET_PROTOCOL.md).
 

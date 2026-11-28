@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.4.0] - 2026-11-27
+
+Fan stack P1 (Xiaomi via FanCommon) and HR range limit state on Touch / WebSocket.
+
+### Added
+- **HR range limit state (#19):** `HeartRateSettings::requestShift` returns `HrShiftResult` (`Applied` / `LimitMin` / `LimitMax` / `Rejected`); `plusAtLimit()` / `minusAtLimit()`. `HEART_RATE_SETTINGS` (0x0B) adds a `flags` byte (bit0=limit_min, bit1=limit_max). Touch greys inactive ± via HomeWindWSAmoled 1.8.0 `homewind_set_hr_shift_enabled`. WebUI stores `state.hrLimitMin` / `hrLimitMax`. `fan/step` 409 and `state` `limit=` unchanged in behaviour.
+
+### Changed
+- **Fans P1:** `FanCommon` 1.0.0 + SmartMiFanAsync 3.0.0 + `FanBus` / `FanSlotView` (Xiaomi); see `Refactoring/AGENT_FAN_P1.md`.
+- **Docs:** `AGENT_FEATURES.md` current state → 2.4.0 / BBS 3.3.4; §2 FTMS proxy **parked** (`docs/AGENT_FTMS_PROXY_DECISION.md`); KICKR Core on trainer validated list (website copy).
+- **Tooling:** builds verified on Arduino-ESP32 **3.3.13** (IDF 5.5.6); Espressif board URL needed for the index (`package_esp32_index.json`).
+
+### Fixed
+- **Maintenance:** `maintenance/status` reports `failed_step` + `failed_elapsed_ms` on failure; tick no longer false-fails when `request()` saw a newer `millis()` than the loop tick.
+- **Fans:** `FanController::stopForMaintenance()` calls `FanBus::end()` after `prepareForSleep` so the FanCommon arena is released.
+- **HR shift at limit:** `requestShift` LimitMin/LimitMax marks `HEART_RATE_SETTINGS` dirty (Touch and `fan/step`), so WebSocket limit flags update immediately.
+- **BuildInfo:** default `FW_VERSION` / `FW_BUILD_ID` aligned with 2.4.0 (IDE builds without `build.sh` stamp).
+
+### Dependencies
+- Touch: HomeWindWSAmoled ≥ **1.8.0**.
+- FanCommon ≥ 1.0.0, SmartMiFanAsync ≥ 3.0.0; BluetoothBikeSensorServer ≥ 3.3.4.
+
 ## [2.3.0] - 2026-11-22
 
 For the **Karoo 3 Homewind App** (Bike Computer ≥ 0.5.0): status and fan control over HTTP so the extension no longer needs a WebSocket slot. Older firmware (2.0/2.1) still works via the app’s WebSocket fallback when `/api/v1/state` returns 404.

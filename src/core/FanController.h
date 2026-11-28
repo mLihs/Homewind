@@ -13,9 +13,8 @@
 
 #if HW_ENABLE_FANS
 
-#include <WiFiUdp.h>
 #include <Preferences.h>
-#include <SmartMiFanAsync.h>
+#include "FanBus.h"
 
 #if defined(ARDUINO_ARCH_ESP32)
 #include "freertos/FreeRTOS.h"
@@ -100,7 +99,8 @@ public:
   bool isUsed(uint8_t index) const { return index < MAX_FANS && _fans[index].used; }
   bool getFanConfig(uint8_t index, FanConfig& config) const;
   bool getFanConfigByToken(const String& token, FanConfig& config) const;
-  bool getDiscoveredFans(SmartMiFanInfo* fans, size_t& count) const;
+  /** Used library slots as neutral views (no SmartMiFanInfo leak). */
+  size_t getDiscoveredFans(FanSlotView* fans, size_t cap) const;
 
   void markTelemetryDirty();
   uint8_t getFanRecoveryUiState(uint8_t index) const;
@@ -172,7 +172,6 @@ private:
   bool _maintenanceStopped;
   uint8_t _postConnectSpeed;
   uint32_t _handshakeTtlS;
-  WiFiUDP _fanUdp;
 
 #if HOMEWIND_ENABLE_WEBSOCKET
   WebSocketTelemetry* _telemetry;

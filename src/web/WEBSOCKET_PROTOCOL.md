@@ -77,12 +77,13 @@ Total: 12 bytes
 
 **Payload:**
 ```
-[min:uint16][max:uint16]
+[min:uint16][max:uint16][flags:uint8]
 ```
-Total: 4 bytes
+Total: 5 bytes (since 2.4.0; older clients that only read 4 bytes still work)
 
 - `min`: Minimum heart rate (BPM, little-endian)
 - `max`: Maximum heart rate (BPM, little-endian)
+- `flags`: bit0 = `limit_min` (plus / lower-range blocked; next −5 would cross 50), bit1 = `limit_max` (minus / raise-range blocked; next +5 would cross 200)
 
 Sent when the range changes: `heartrate/setmin`, `heartrate/setmax` or plus/minus on the Touch display (shifts min and max by 5 bpm). The new range applies at once; it is saved to NVS 3 s after the last change (since 2.1.0), so a restart within those 3 s keeps the previous range.
 

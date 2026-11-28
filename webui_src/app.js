@@ -59,6 +59,8 @@
     fanControl: null, // last FAN_CONTROL frame; null on firmware without it
     trainer: null,    // last TRAINER_STATUS frame; null on firmware without it
     appsConnected: null, // last APP_STATUS frame; null until it arrives (older firmware: never)
+    hrLimitMin: false, // HEART_RATE_SETTINGS flags: plus (lower range) blocked
+    hrLimitMax: false, // HEART_RATE_SETTINGS flags: minus (raise range) blocked
   };
 
   // ---- DOM helpers (tiny, no framework) ----
@@ -510,6 +512,14 @@
         if (u8.length < off + 4) return;
         const min = u16(dv, off);
         const max = u16(dv, off + 2);
+        // flags (since 2.4.0): bit0=limit_min (plus blocked), bit1=limit_max
+        if (u8.length >= off + 5) {
+          state.hrLimitMin = (u8[off + 4] & 0x01) !== 0;
+          state.hrLimitMax = (u8[off + 4] & 0x02) !== 0;
+        } else {
+          state.hrLimitMin = min < 50 + 5;
+          state.hrLimitMax = max + 5 > 200;
+        }
         // Update UI elements
         const hrMinDisplay = document.getElementById("hr-min-value");
         const hrMaxDisplay = document.getElementById("hr-max-value");

@@ -238,6 +238,27 @@ const char* resultString() {
   return "unknown";
 }
 
+static const char* stepToString(hw::MaintState s) {
+  switch (s) {
+    case hw::MaintState::IDLE: return "idle";
+    case hw::MaintState::REQUESTED: return "requested";
+    case hw::MaintState::STOPPING_DISCOVERY: return "stopping_discovery";
+    case hw::MaintState::STOPPING_SCANS: return "stopping_scans";
+    case hw::MaintState::REMOVING: return "removing";
+    case hw::MaintState::ACKED: return "acked";
+    case hw::MaintState::FAILED: return "failed";
+  }
+  return "unknown";
+}
+
+const char* failedStepString() {
+  return stepToString(s_lc.failedStep());
+}
+
+uint32_t failedElapsedMs() {
+  return s_lc.failedElapsedMs();
+}
+
 bool restartRequired() {
   return s_lc.restartRequired();
 }

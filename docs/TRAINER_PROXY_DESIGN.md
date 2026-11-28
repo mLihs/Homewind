@@ -379,8 +379,9 @@ R1 = M1–M3 on NEO 2T (without M2b); KICKR listed after M4.
 final R1 release, measure on the release builds of Basic and Touch, 60 min ride with
 trainer, HR and Zwift: free internal heap (min/avg), largest free block, PSRAM use, task
 stack high-water marks (serial `t`). Thresholds as G7. Only if they fail, RAM tuning
-(`AGENT_RAM_TUNING.md` C/D) is decided. R1 ships a **tested-trainer list** (start: NEO 2T),
-not "any trainer".
+(`AGENT_RAM_TUNING.md` C/D) is decided. R1 ships a **tested-trainer list** (start: NEO 2T; **Wahoo KICKR Core**
+added 2026-11-27 from user field report with Rouvy — setup/connect OK, full
+ride pending), not "any trainer". See `Website/docs/WEBSITE_TRAINER_MIRROR.md`.
 
 ---
 

@@ -55,6 +55,7 @@ public:
 private:
   void applyTouchRequests();
   void pollStatus();
+  void syncHrShiftLimits();
 
   static void staticHrShift(int8_t steps);
   static void staticFanMode();
@@ -78,6 +79,7 @@ private:
   std::atomic<bool> _urlDirty;
   std::atomic<bool> _badgesDirty;
   std::atomic<bool> _fanControlDirty;
+  std::atomic<bool> _hrShiftLimitsDirty;
   std::atomic<bool> _activity;
 
   /* Touch requests from the LVGL task, applied in the loop task */
@@ -105,6 +107,8 @@ private:
   fan_mode_t _fanMode;
   bool _fanOn;
   uint8_t _fanPct;
+  bool _hrPlusEnabled;
+  bool _hrMinusEnabled;
 
   uint32_t _lastPollMs;
   uint32_t _lastWakeMs;

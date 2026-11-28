@@ -1,8 +1,8 @@
 # Homewind Documentation Index
 
-**Version**: 2.3.0
+**Version**: 2.4.0
 **Platform**: ESP32 (Arduino Core)  
-**Last Updated**: 2026-11-22
+**Last Updated**: 2026-11-27
 
 ---
 

@@ -18,7 +18,7 @@
 #if HW_ENABLE_FANS && HW_ENABLE_BLE
 
 #include <Arduino.h>
-#include <SmartMiFanAsync.h>
+#include "FanBus.h"
 #if HW_ENABLE_FAN_POWER_MODE
 #include "FanBlend.h"
 #include "FanControlFrame.h"

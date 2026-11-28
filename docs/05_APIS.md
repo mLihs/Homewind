@@ -663,8 +663,11 @@ GET /api/v1/action/system/maintenance/status
 {"state":"idle|requested|stopping_discovery|stopping_scans|removing|acked|failed",
  "reason":"none|ota|factory_reset|manual","result":"pending|ack|failed|aborted",
  "restart_required":false,
+ "failed_step":"requested|stopping_discovery|…",
+ "failed_elapsed_ms":1234,
  "factory_reset":{"attempted":1,"failed_mask":0}}
 ```
+`failed_step` / `failed_elapsed_ms` only when `result` is `failed`.  
 `factory_reset` is present only after a reboot that followed a factory reset.
 
 ---
@@ -760,7 +763,7 @@ Sent only when state changes (marked dirty).
 | `FIRMWARE_VERSION` | `0x08` | Firmware version update | `[version_len:uint8][version:bytes]` |
 | `FIRMWARE_PROGRESS` | `0x09` | Firmware update progress | `[percent:uint8]` |
 | `FIRMWARE_SEARCH_RESULT` | `0x0A` | Firmware search result | `[has_update:uint8][version_len:uint8][version:bytes][notes_len:uint16][notes:bytes]` |
-| `HEART_RATE_SETTINGS` | `0x0B` | Heart rate min/max settings | `[min:uint16][max:uint16]` |
+| `HEART_RATE_SETTINGS` | `0x0B` | Heart rate min/max settings | `[min:uint16][max:uint16][flags:uint8]` (flags: bit0=limit_min, bit1=limit_max; since 2.4.0) |
 | `BIKE_METRICS` | `0x0D` | Power and cadence | `[power_w:int16][cadence_rpm:uint16][flags:uint8]` |
 | `FAN_CONTROL` | `0x0E` | Fan mode and target (`HW_ENABLE_FAN_POWER_MODE`, on in release builds) | `[mode][effective][reason][target_on][target_pct][dominant][power_state][ftp_w:uint16][cooldown:int8]` |
 | `TRAINER_STATUS` | `0x0F` | Trainer mirror status (trainer firmware only) | `[state:uint8][flags:uint8][setup:uint8][name_len:uint8][name:bytes]` |

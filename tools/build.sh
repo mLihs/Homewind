@@ -8,7 +8,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 WORKSPACE="$(cd "$ROOT/.." && pwd)"
 CACHE_ROOT="$ROOT/build/.cache"
 
-# Board option ids match the ESP32 Arduino core 3.3.12 menus.
+# Board option ids match the ESP32 Arduino core 3.3.12/3.3.13 menus.
 # Touch: ARDUINO_SETUP.md (PSRAM on, 16MB, USB CDC on boot).
 # Basic: XIAO ESP32-S3. CDCOnBoot=default means Enabled on this board.
 TOUCH_FQBN="esp32:esp32:waveshare_esp32_s3_touch_amoled_164:UploadSpeed=921600,USBMode=hwcdc,CDCOnBoot=cdc,MSCOnBoot=default,DFUOnBoot=default,UploadMode=default,CPUFreq=240,FlashMode=qio,PartitionScheme=app3M_fat9M_16MB,DebugLevel=none,PSRAM=enabled,LoopCore=1,EventsCore=1,EraseFlash=none"
@@ -20,6 +20,7 @@ WORKSPACE_LIBS=(
   HomeWindWSAmoled
   BluetoothBikeSensorServer
   NimBLE-Arduino
+  FanCommon
   SmartMiFanAsync
   wifiMangerLite
   GitFirmwareUpdate

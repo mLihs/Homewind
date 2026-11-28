@@ -75,7 +75,7 @@ extern BLERelayManager* g_bleRelayManager;
 
 #if HW_ENABLE_FANS
 #include "../core/FanController.h"
-#include <SmartMiFanAsync.h>
+#include "../core/FanBus.h"
 extern FanController* g_fanController;
 #endif
 
@@ -853,8 +853,8 @@ size_t WebSocketTelemetry::buildFansSnapshot(uint8_t* buffer, size_t bufferSize)
     // (e.g., from before the fan was deleted and re-added).
     if (cfg.ip != IPAddress(0, 0, 0, 0)) {
       SmartMiFanInfo info;
-      if (SmartMiFan::info(i, info)) {
-        const FanParticipationState state = SmartMiFan::participation(i);
+      if (FanBus::info(i, info)) {
+        const FanParticipationState state = FanBus::participation(i);
         if (state == FanParticipationState::ERROR) {
           connected = false;
           controlActive = false;
@@ -1195,10 +1195,11 @@ size_t WebSocketTelemetry::buildFirmwareSearchResult(uint8_t* buffer, size_t buf
 }
 
 size_t WebSocketTelemetry::buildHeartRateSettings(uint8_t* buffer, size_t bufferSize) {
-  // Format: [min:uint16][max:uint16]
-  // Total: 4 bytes
+  // Format: [min:uint16][max:uint16][flags:uint8]
+  // flags bit0 = limit_min (plus blocked), bit1 = limit_max (minus blocked)
+  // Total: 5 bytes (4-byte clients still work)
   
-  if (bufferSize < 4) {
+  if (bufferSize < 5) {
     return 0;
   }
   
@@ -1211,10 +1212,14 @@ size_t WebSocketTelemetry::buildHeartRateSettings(uint8_t* buffer, size_t buffer
   
   uint16_t minHR = g_heartRateSettings->getMin();
   uint16_t maxHR = g_heartRateSettings->getMax();
+  uint8_t flags = 0;
+  if (g_heartRateSettings->plusAtLimit()) flags |= 0x01;
+  if (g_heartRateSettings->minusAtLimit()) flags |= 0x02;
   
   size_t offset = 0;
   offset = writeUint16(buffer, offset, minHR);
   offset = writeUint16(buffer, offset, maxHR);
+  buffer[offset++] = flags;
   
   return offset;
 #else

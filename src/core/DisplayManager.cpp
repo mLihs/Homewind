@@ -20,7 +20,7 @@ extern BLERelayManager* g_bleRelayManager;
 #if HW_ENABLE_FANS
 #include "FanController.h"
 extern FanController* g_fanController;
-#include <SmartMiFanAsync.h>
+#include "FanBus.h"
 #endif
 
 #if HW_ENABLE_FANS && HW_ENABLE_BLE
@@ -41,10 +41,8 @@ extern FanModeSettings* g_fanModeSettings;
 #include <HomeWindWSAmoled.h>
 
 static_assert(HOMEWIND_WS_AMOLED_VERSION_MAJOR > 1 ||
-                  (HOMEWIND_WS_AMOLED_VERSION_MAJOR == 1 &&
-                   (HOMEWIND_WS_AMOLED_VERSION_MINOR > 7 ||
-                    (HOMEWIND_WS_AMOLED_VERSION_MINOR == 7 && HOMEWIND_WS_AMOLED_VERSION_PATCH >= 1))),
-              "HomeWindWSAmoled >= 1.7.1 required (rows, badges, fan control, locked init)");
+                  (HOMEWIND_WS_AMOLED_VERSION_MAJOR == 1 && HOMEWIND_WS_AMOLED_VERSION_MINOR >= 8),
+              "HomeWindWSAmoled >= 1.8.0 required (HR shift inactive keys)");
 
 namespace {
 constexpr uint32_t kPollMs = 500;   // badges, trainer, fan control
@@ -83,6 +81,7 @@ DisplayManager::DisplayManager()
   , _urlDirty(false)
   , _badgesDirty(false)
   , _fanControlDirty(false)
+  , _hrShiftLimitsDirty(true)
   , _activity(false)
   , _shiftRequest(0)
   , _modeRequest(false)
@@ -99,6 +98,8 @@ DisplayManager::DisplayManager()
   , _fanMode(FAN_MODE_PURE)
   , _fanOn(false)
   , _fanPct(0)
+  , _hrPlusEnabled(true)
+  , _hrMinusEnabled(true)
   , _lastPollMs(0)
   , _lastWakeMs(0) {
   _cachedHRName[0] = '\0';
@@ -147,7 +148,7 @@ void DisplayManager::loop() {
   }
 
   if (!wake && !_hrValueDirty && !_bikeValueDirty && !_hrStateDirty && !_bikeStateDirty &&
-      !_fansDirty && !_urlDirty && !_badgesDirty && !_fanControlDirty) {
+      !_fansDirty && !_urlDirty && !_badgesDirty && !_fanControlDirty && !_hrShiftLimitsDirty) {
     return;
   }
 
@@ -186,6 +187,9 @@ void DisplayManager::loop() {
   }
   if (_fanControlDirty.exchange(false)) {
     homewind_set_fan_control(_fanMode, _fanOn, _fanPct);
+  }
+  if (_hrShiftLimitsDirty.exchange(false)) {
+    homewind_set_hr_shift_enabled(_hrPlusEnabled, _hrMinusEnabled);
   }
   if (_urlDirty.exchange(false)) {
     homewind_set_qr_code_url(_cachedUrl);
@@ -324,8 +328,8 @@ void DisplayManager::updateFans() {
     SmartMiFanInfo info;
     fan_state_t state = FAN_STATE_INACTIVE;
     bool isOn = false;
-    if (SmartMiFan::info(i, info)) {
-      const FanParticipationState p = SmartMiFan::participation(i);
+    if (FanBus::info(i, info)) {
+      const FanParticipationState p = FanBus::participation(i);
       state = (p == FanParticipationState::ERROR || !info.ready) ? FAN_STATE_ERROR : FAN_STATE_ACTIVE;
       isOn = (p == FanParticipationState::ACTIVE);
     }
@@ -401,6 +405,24 @@ void DisplayManager::pollStatus() {
     _fanPct = pct;
     _fanControlDirty = true;
   }
+
+  syncHrShiftLimits();
+}
+
+void DisplayManager::syncHrShiftLimits() {
+  bool plusOk = true;
+  bool minusOk = true;
+#if HW_ENABLE_NVS
+  if (g_heartRateSettings && g_heartRateSettings->ready()) {
+    plusOk = !g_heartRateSettings->plusAtLimit();
+    minusOk = !g_heartRateSettings->minusAtLimit();
+  }
+#endif
+  if (plusOk != _hrPlusEnabled || minusOk != _hrMinusEnabled) {
+    _hrPlusEnabled = plusOk;
+    _hrMinusEnabled = minusOk;
+    _hrShiftLimitsDirty = true;
+  }
 }
 
 // Plus/minus one HR step per tap; the mode cycles Pure, Smart, Hybrid and skips
@@ -413,6 +435,7 @@ void DisplayManager::applyTouchRequests() {
     uint16_t hi = 0;
     g_heartRateSettings->requestShift(steps > 0 ? 1 : -1, lo, hi);
   }
+  syncHrShiftLimits();
 #else
   (void)steps;
 #endif

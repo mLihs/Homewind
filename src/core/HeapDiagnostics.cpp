@@ -10,7 +10,7 @@
 #include "DebugLog.h"
 #include <esp_heap_caps.h>
 #if HW_ENABLE_FANS
-#include <SmartMiFanAsync.h>
+#include "FanBus.h"
 #endif
 
 namespace HeapDiagnostics {
@@ -200,9 +200,9 @@ bool hwHeapDiagRuntimeTick(const OperationalStatus* status) {
       uint8_t printed = 0;
       for (uint8_t i = 0; i < SMARTMIFAN_MAX_FANS; i++) {
         SmartMiFanInfo info;
-        if (!SmartMiFan::info(i, info)) continue;
+        if (!FanBus::info(i, info)) continue;
         printed++;
-        const FanParticipationState state = SmartMiFan::participation(i);
+        const FanParticipationState state = FanBus::participation(i);
         const char* stateStr = (state == FanParticipationState::ACTIVE) ? "ACTIVE" :
                               (state == FanParticipationState::INACTIVE) ? "INACTIVE" : "ERROR";
         const char* errorStr = "OK";

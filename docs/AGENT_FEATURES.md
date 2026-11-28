@@ -6,13 +6,12 @@ maintainer approves before code is written. Facts marked **verify** are not
 yet confirmed on hardware or against a primary source.
 
 Rules
-- **RAM gate** per feature, measured on the Touch with HR + CSC + PWR, Zwift
-  and the WebUI connected (`HEAP_BENCHMARK.md`): steady free internal heap
-  ≥ 40 KB, minimum since boot ≥ 30 KB, largest free block ≥ 25 KB.
-  Baseline: 47.8–52.8 KB free, minimum 38.9 KB, largest block 31.7 KB,
-  measured with a 1.7.0 diagnostic build + HomeWindWSAmoled 1.6.1 (the
-  content of 1.7.1); re-measure on the 1.7.1 release build before the first
-  feature.
+- **RAM gate** per feature, measured on the Touch (`HEAP_BENCHMARK.md`).
+  **Hard floor (G7):** min free ≥ 20 KB, largest free block ≥ 16 KB.
+  **Stretch (AGENT):** steady free ≥ 40 KB, min since boot ≥ 30 KB, largest
+  block ≥ 25 KB when practical.
+  Recent reference: Homewind **2.3.0** Touch ride ~41 KB free / 30.7 KB
+  block; P1 FanBus idle+WebUI stress (2026-11-27) ~39 KB / 30.7–31.7 KB.
   Each new BLE link or GATT service costs internal RAM; measure it.
 - BLE protocol work goes into BBS; Homewind only wires, stores settings and
   shows UI.
@@ -20,32 +19,35 @@ Rules
   and must not change the Basic build unless intended.
 - Measure heap (`t`/`h`, `HEAP_BENCHMARK.md`) before and after each feature.
 
-## Current state (verified 2026-11-14, Homewind 1.8.1, BikeSensor 3.2.2)
+## Current state (verified 2026-11-27, Homewind 2.4.0, BikeSensor 3.3.4)
 
+- **Shipped since 1.8.1:** Network identity 2.2.0; Karoo HTTP API 2.3.0
+  (`/api/v1/state`, `fan/step`, `fanmode/cycle`); Fan modes Pure/Smart/Hybrid
+  (1.8.0); **2.4.0** Fans P1 (FanCommon/SMA 3.0/FanBus) + HR ± inactive at
+  50/200 (`HEART_RATE_SETTINGS` flags; HomeWindWSAmoled **1.8.0**).
+- **Trainer mirror (release builds from 2.0):** Homewind can mirror a smart
+  trainer to apps (CPS + Tacx FE-C over BLE as needed). This is **not** an
+  FTMS control proxy — apps still do not get ERG/simulation *through*
+  Homewind as a controllable FTMS indoor bike. Spec:
+  `docs/AGENT_TRAINER_MIRROR.md`, design `docs/TRAINER_PROXY_DESIGN.md`.
+  Controllable FTMS proxy remains **§2** (open, architecture decision first).
 - BBS relays HR (0x180D), CSC (0x1816) and Cycling Power (0x1818) as
-  **notify-only** characteristics. There is no FTMS service and no writable
-  characteristic, so Zwift sees Homewind as a power source, never as a
-  controllable trainer. On HR disconnect the relay notifies centrals once
-  with 0 bpm (3.2.2).
-- Homewind has three sensor slots (HR, CSC, PWR); `tools/build.sh` sets
-  `-DBBS_COMPILE_POWER=1`, `static_assert`s enforce it. Cadence: CSC while
-  connected, else the power meter. Fan modes Pure / Smart / Hybrid shipped
-  in 1.8.0 (default Pure).
-- BLE links: sketch-folder `sdkconfig.h` raises
-  `CONFIG_BT_NIMBLE_MAX_CONNECTIONS` from 3 to **4** = three sensors + one
-  central (Zwift/Rouvy). All four are in use when HR + CSC + power are set up.
-- Multi-type sensors: a trainer advertising CSC + Cycling Power is stored for
-  the slot it was discovered with (`bleResolveDiscoveryType()`), so it can
-  sit in the PWR slot today as a read-only power source. A trainer that
-  advertises only FTMS (0x1826) is not found by the PWR discovery.
-- NimBLE-Arduino 2.5.2+hw1 fixes the crash when a connection handle exceeds
-  `MAX_CONNECTIONS`. Any further increase must be re-tested against this fix.
-- Touch RAM: 1.7.1 halved the display draw buffers (about 32 KB more internal
-  RAM); the figures in the RAM gate above are the current baseline.
-- BBS `src/` line budget: 2,600 non-blank, non-`//` lines, set in the BBS v3
-  design (`Refactoring/BBS_V3_DESIGN.md` rev 53, outside the repositories);
-  2,587 used on 2026-11-08.
-  An FTMS client and server do not fit without a budget decision.
+  **notify-only** on the hub path. Hub mode alone still has no FTMS service
+  and no writable control characteristic for Zwift.
+- Sensor slots HR / CSC / PWR; `tools/build.sh` sets `-DBBS_COMPILE_POWER=1`
+  and trainer compile flags for the mirror. Cadence: CSC while connected,
+  else power meter / mirrored trainer power where wired.
+- BLE links: sketch `sdkconfig.h` → `CONFIG_BT_NIMBLE_MAX_CONNECTIONS` **4**
+  (three sensors + one central) in hub setups; mirror path documented in the
+  trainer mirror agent doc (connection budget differs when mirroring).
+- Multi-type / FTMS-only discovery limits from 1.8.x still apply for the PWR
+  slot (FTMS-only `0x1826` not discovered as PWR). Trainer setup is separate.
+- NimBLE-Arduino 2.5.2+hw1: connection-handle crash fix; keep re-testing if
+  `MAX_CONNECTIONS` rises.
+- **Fans (P1, 2026-11-27):** `FanCommon` + SmartMiFanAsync 3.0 + `FanBus`
+  (Xiaomi). Dyson P2 blocked until real HW (`Refactoring/AGENT_FAN_P1.md`).
+- BBS `src/` line budget: 2,600 non-blank, non-`//` lines (BBS v3 design);
+  FTMS client+server still need a budget decision before §2 lands in BBS.
 
 ---
 
@@ -61,6 +63,11 @@ the concept §8 release readiness note.
 
 ## 2. Smart-trainer support — FTMS trainer proxy
 
+- **Status vs trainer mirror:** The **trainer mirror** (shipped 2.0+, see
+  Current state) already lets apps ride on mirrored power/cadence from many
+  trainers. **§2 is the remaining gap:** a Zwift-facing **FTMS** indoor-bike
+  service with Control Point forwarding (ERG / simulation). Do not treat the
+  mirror as fulfilling §2.
 - **Goal**: Homewind connects to the trainer as a client and offers Zwift one
   device that is HR + cadence + power **and controllable** (ERG, simulation).
 - **Why a proxy**: some trainers accept only one BLE central (Tacx NEO
@@ -69,11 +76,10 @@ the concept §8 release readiness note.
   forward everything, including control. Newer Wahoo KICKR models often
   accept several BLE connections (**verify** per FW); there Zwift can also
   connect directly, and the proxy is a convenience, not a necessity.
-- **Open architecture decision (before any design note):**
-  - Where FTMS lives: BBS (needs a line-budget raise, see current state) or
-    a separate library that Homewind wires next to BBS.
-  - How an FTMS-only trainer is discovered and stored (new sensor type or
-    role, see below); today the PWR slot discovers by Cycling Power.
+- **Architecture decision (2026-11-27):** §2 **parked** — trainer mirror
+  covers NEO 2T and KICKR Core; see `docs/AGENT_FTMS_PROXY_DECISION.md`.
+  If resurrected later: prefer a separate library (not BBS). Roles vs fixed
+  slots remain a design question only if §2 returns (below).
 - **Design question: roles instead of slots (sensor setup / WebUI).**
   Today the setup has fixed slots (HR, CSC, PWR). With a trainer, one device
   can deliver several things, and riders combine devices, e.g. power meter +

@@ -24,7 +24,7 @@
 #if HW_ENABLE_FANS && HW_ENABLE_BLE
 
 // Include SmartMiFanAsync for participation state
-#include <SmartMiFanAsync.h>
+#include "FanBus.h"
 
 #if HW_ENABLE_FAN_POWER_MODE
 #include <BikeSensor.h>
@@ -427,7 +427,7 @@ void FanHRAdapter::applyControl(uint32_t nowMs) {
       _lastHrValidState = _hrValid; // now disconnected
       if (_pureEverHadHr) {
         HW_DEBUG_PRINTLN("[FanHRAdapter] HR disconnected: turning off fans (fail-safe)");
-        const CmdAccept acc = SmartMiFan::setPowerAll(false);
+        const CmdAccept acc = FanBus::setPowerAll(false);
         if (acc.result != CmdResult::REJECTED) {
           _powerSeq = acc.seq;
           for (size_t i = 0; i < MAX_FANS; i++) {
@@ -450,7 +450,7 @@ void FanHRAdapter::applyControl(uint32_t nowMs) {
       }
     } else if (_reassertPending && !_reassertSent) {
       if (nowMs - _disconnectAtMs >= FANHR_FAILSAFE_REASSERT_MS) {
-        const CmdAccept acc = SmartMiFan::setPowerAll(false);
+        const CmdAccept acc = FanBus::setPowerAll(false);
         if (acc.result != CmdResult::REJECTED) {
           _powerSeq = acc.seq;
           _reassertSent = true;
@@ -482,7 +482,7 @@ void FanHRAdapter::applyControl(uint32_t nowMs) {
 void FanHRAdapter::sendTargets(uint32_t nowMs) {
   // Get discovered fans (expensive operation)
   // Use SmartMiFanAsync as Single Source of Truth for fan state
-  const FanMask used = SmartMiFan::used();
+  const FanMask used = FanBus::used();
   if (used == 0) {
     // No fans discovered yet (SmartConnect still running or failed)
     // Don't log every cycle - only on state change
@@ -581,7 +581,7 @@ void FanHRAdapter::sendTargets(uint32_t nowMs) {
                       _globalTargetSpeedPct);
     }
     FANHR_DEBUG_PRINTF("[FanHRAdapter] Calling setPowerAll(%s)\n", _globalTargetPower ? "ON" : "OFF");
-    const CmdAccept acc = SmartMiFan::setPowerAll(_globalTargetPower);
+    const CmdAccept acc = FanBus::setPowerAll(_globalTargetPower);
     if (acc.result != CmdResult::REJECTED) {
       _powerSeq = acc.seq;
 #if HW_ENABLE_FAN_POWER_MODE
@@ -618,12 +618,12 @@ void FanHRAdapter::sendTargets(uint32_t nowMs) {
       HW_DEBUG_PRINTF("[FanHRAdapter] Max speed latch released (speed < %u%%)\n", (unsigned)HW_FAN_MAX_SPEED_PERCENT);
     }
     
-    if (SmartMiFan::commandPending(CmdKind::POWER) || _powerSeq != 0) {
+    if (FanBus::commandPending(CmdKind::POWER) || _powerSeq != 0) {
       return;
     }
 
     FANHR_DEBUG_PRINTF("[FanHRAdapter] Calling setSpeedAll(%u%%)\n", targetSpeed);
-    const CmdAccept acc = SmartMiFan::setSpeedAll(targetSpeed);
+    const CmdAccept acc = FanBus::setSpeedAll(targetSpeed);
     if (acc.result != CmdResult::REJECTED) {
       _speedSeq = acc.seq;
       _pendingSpeedPct = targetSpeed;
@@ -680,7 +680,7 @@ void FanHRAdapter::onCadenceSample(uint16_t rpm, uint32_t sampleMs) {
 }
 
 bool FanHRAdapter::powerOffAll() {
-  const CmdAccept acc = SmartMiFan::setPowerAll(false);
+  const CmdAccept acc = FanBus::setPowerAll(false);
   if (acc.result == CmdResult::REJECTED) {
     return false;
   }

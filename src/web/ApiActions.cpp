@@ -1381,11 +1381,11 @@ void ApiActions::handleState(AsyncWebServerRequest* request) {
           continue;
         }
         SmartMiFanInfo info;
-        if (!SmartMiFan::info(i, info)) {
+        if (!FanBus::info(i, info)) {
           slot[i] = 3;
           continue;
         }
-        const FanParticipationState p = SmartMiFan::participation(i);
+        const FanParticipationState p = FanBus::participation(i);
         if (p == FanParticipationState::ERROR || !info.ready) {
           slot[i] = 3;
         } else if (p == FanParticipationState::ACTIVE) {
@@ -1408,8 +1408,8 @@ void ApiActions::handleState(AsyncWebServerRequest* request) {
     hrMin = g_heartRateSettings->getMin();
     hrMax = g_heartRateSettings->getMax();
     // Plus lowers the range (−5); minus raises it (+5). Same as Touch.
-    const bool blockPlus = hrMin < 50 + 5;
-    const bool blockMinus = hrMax + 5 > 200;
+    const bool blockPlus = g_heartRateSettings->plusAtLimit();
+    const bool blockMinus = g_heartRateSettings->minusAtLimit();
     if (blockPlus && blockMinus) limit = "min";  // at both hard ends; plus is the tighter UX
     else if (blockPlus) limit = "min";
     else if (blockMinus) limit = "max";
@@ -1554,17 +1554,24 @@ void ApiActions::handleMaintenanceEnd(AsyncWebServerRequest* request) {
 
 void ApiActions::handleMaintenanceStatus(AsyncWebServerRequest* request) {
   // Whitelisted, heap-free
-  char json[224];
+  char json[320];
   int n = snprintf(json, sizeof(json),
                    "{\"state\":\"%s\",\"reason\":\"%s\",\"result\":\"%s\",\"restart_required\":%s",
                    MaintenanceMode::stateString(), MaintenanceMode::reasonString(),
                    MaintenanceMode::resultString(),
                    MaintenanceMode::restartRequired() ? "true" : "false");
+  if (n > 0 && static_cast<size_t>(n) < sizeof(json) &&
+      strcmp(MaintenanceMode::resultString(), "failed") == 0) {
+    n += snprintf(json + n, sizeof(json) - static_cast<size_t>(n),
+                  ",\"failed_step\":\"%s\",\"failed_elapsed_ms\":%lu",
+                  MaintenanceMode::failedStepString(),
+                  static_cast<unsigned long>(MaintenanceMode::failedElapsedMs()));
+  }
   uint32_t attempted = 0;
   uint32_t failedMask = 0;
   if (n > 0 && static_cast<size_t>(n) < sizeof(json) &&
       MaintenanceMode::factoryResetReport(attempted, failedMask)) {
-    n += snprintf(json + n, sizeof(json) - n,
+    n += snprintf(json + n, sizeof(json) - static_cast<size_t>(n),
                   ",\"factory_reset\":{\"attempted\":%lu,\"failed_mask\":%lu}",
                   static_cast<unsigned long>(attempted), static_cast<unsigned long>(failedMask));
   }
@@ -1721,14 +1728,17 @@ void ApiActions::handleFanStep(AsyncWebServerRequest* request) {
 
   uint16_t newMin = 0;
   uint16_t newMax = 0;
-  if (g_heartRateSettings->requestShift(steps, newMin, newMax)) {
+  const HrShiftResult result = g_heartRateSettings->requestShift(steps, newMin, newMax);
+  if (result == HrShiftResult::Applied) {
     char out[48];
     snprintf(out, sizeof(out), "min=%u\nmax=%u\n", newMin, newMax);
     sendResponse(request, 200, out);
-  } else if (MaintenanceMode::admissionClosed()) {
+  } else if (result == HrShiftResult::Rejected) {
     sendError(request, 409, "Maintenance active");
   } else {
-    sendError(request, 409, steps < 0 ? "ERR:limit_min" : "ERR:limit_max");
+    // LimitMin/LimitMax: requestShift already marks HEART_RATE_SETTINGS dirty.
+    sendError(request, 409,
+              result == HrShiftResult::LimitMin ? "ERR:limit_min" : "ERR:limit_max");
   }
 #endif
 }

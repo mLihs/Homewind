@@ -103,9 +103,12 @@ bool HeartRateSettings::requestMax(uint16_t max, uint16_t& outMin, uint16_t& out
   return true;
 }
 
-bool HeartRateSettings::requestShift(int8_t steps, uint16_t& outMin, uint16_t& outMax) {
+HrShiftResult HeartRateSettings::requestShift(int8_t steps, uint16_t& outMin,
+                                              uint16_t& outMax) {
   if (!_initialized || MaintenanceMode::admissionClosed()) {
-    return false;
+    outMin = _minHeartRate;
+    outMax = _maxHeartRate;
+    return HrShiftResult::Rejected;
   }
 
   const int delta = steps * static_cast<int>(SHIFT_STEP);
@@ -118,14 +121,55 @@ bool HeartRateSettings::requestShift(int8_t steps, uint16_t& outMin, uint16_t& o
     _pendingMin = static_cast<uint16_t>(baseMin + delta);
     _pendingMax = static_cast<uint16_t>(baseMax + delta);
     _pendingValid = true;
+    outMin = _pendingMin;
+    outMax = _pendingMax;
+  } else {
+    outMin = baseMin;
+    outMax = baseMax;
   }
-  outMin = ok ? _pendingMin : baseMin;
-  outMax = ok ? _pendingMax : baseMax;
   portEXIT_CRITICAL(&_mux);
 
-  HW_DEBUG_PRINTF("[HeartRateSettings] Shift %d %s: min=%u, max=%u\n", delta,
-                  ok ? "queued" : "rejected", outMin, outMax);
-  return ok;
+  if (!ok) {
+    const HrShiftResult limit =
+        steps < 0 ? HrShiftResult::LimitMin : HrShiftResult::LimitMax;
+    HW_DEBUG_PRINTF("[HeartRateSettings] Shift %d blocked (%s): min=%u, max=%u\n",
+                    delta, limit == HrShiftResult::LimitMin ? "limit_min" : "limit_max",
+                    outMin, outMax);
+#if HOMEWIND_ENABLE_WEBSOCKET
+    // Touch / fan/step: push flags even when the range did not change.
+    extern WebSocketTelemetry* g_webSocketTelemetry;
+    if (g_webSocketTelemetry) {
+      g_webSocketTelemetry->markDirty(TelemetryFrameType::HEART_RATE_SETTINGS);
+    }
+#endif
+    return limit;
+  }
+
+  HW_DEBUG_PRINTF("[HeartRateSettings] Shift %d queued: min=%u, max=%u\n", delta,
+                  outMin, outMax);
+  return HrShiftResult::Applied;
+}
+
+bool HeartRateSettings::plusAtLimit() const {
+  if (!_initialized) return true;
+  portENTER_CRITICAL(&_mux);
+  uint16_t min;
+  uint16_t max;
+  requestBaseLocked(min, max);
+  portEXIT_CRITICAL(&_mux);
+  (void)max;
+  return min < HARD_MIN + SHIFT_STEP;
+}
+
+bool HeartRateSettings::minusAtLimit() const {
+  if (!_initialized) return true;
+  portENTER_CRITICAL(&_mux);
+  uint16_t min;
+  uint16_t max;
+  requestBaseLocked(min, max);
+  portEXIT_CRITICAL(&_mux);
+  (void)min;
+  return max > HARD_MAX - SHIFT_STEP;
 }
 
 void HeartRateSettings::loop() {

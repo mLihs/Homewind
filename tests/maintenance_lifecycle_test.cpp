@@ -81,8 +81,22 @@ static void testRequestedDeadline() {
   lc->tick(MaintenanceLifecycle::kRequestedMs + 1, p);
   CHECK(lc->state() == MaintState::FAILED);
   CHECK(lc->result() == MaintResult::FAILED);
+  CHECK(lc->failedStep() == MaintState::REQUESTED);
+  CHECK(lc->failedElapsedMs() == MaintenanceLifecycle::kRequestedMs + 1);
   CHECK(lc->restartRequired());
   CHECK(p.discards == 1 && g_signals == 1);
+  delete lc;
+}
+
+static void testStaleTickAfterNewerRequest() {
+  // Loop tick sees an older nowMs than request() (cross-task) — must not underflow-fail.
+  MaintenanceLifecycle* lc = fresh();
+  FakePort p;
+  p.quiesced = true;
+  CHECK(lc->request(MaintReason::MANUAL, 2000) == MaintAdmit::ACCEPTED);
+  lc->tick(1900, p);
+  CHECK(lc->state() == MaintState::ACKED);
+  CHECK(lc->result() == MaintResult::ACK);
   delete lc;
 }
 
@@ -151,6 +165,8 @@ static void testRemoveFails() {
   lc->tick(1, p);
   CHECK(lc->state() == MaintState::FAILED);
   CHECK(lc->result() == MaintResult::FAILED);
+  CHECK(lc->failedStep() == MaintState::REMOVING);
+  CHECK(lc->failedElapsedMs() == 1);
   delete lc;
 }
 
@@ -289,6 +305,7 @@ int main() {
   testHappyPathSamePass();
   testSameAndDifferentReason();
   testRequestedDeadline();
+  testStaleTickAfterNewerRequest();
   testDiscoveryDeadline();
   testScansDeadline();
   testTotalDeadline();

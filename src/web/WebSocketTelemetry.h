@@ -64,7 +64,7 @@ enum class TelemetryFrameType : uint8_t {
   FIRMWARE_VERSION = 0x08,   // Delta: Firmware version
   FIRMWARE_PROGRESS = 0x09,  // Delta: Firmware update progress
   FIRMWARE_SEARCH_RESULT = 0x0A,  // Delta: Firmware search result
-  HEART_RATE_SETTINGS = 0x0B,     // Snapshot/Delta: Heart rate min/max settings
+  HEART_RATE_SETTINGS = 0x0B,     // Snapshot/Delta: HR min/max + limit flags
   BIKE_METRICS = 0x0D,            // Delta: Power and cadence (hw::BikeMetrics)
   FAN_CONTROL = 0x0E,             // Delta: Fan mode and target (hw::FanControlStatus)
   TRAINER_STATUS = 0x0F,          // Delta: Trainer mirror status (BLERelayManager::TrainerStatus)

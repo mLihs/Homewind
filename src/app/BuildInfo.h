@@ -22,14 +22,14 @@
 #endif
 
 #ifndef FW_VERSION
-#define FW_VERSION "2.3.0"
+#define FW_VERSION "2.4.0"
 #endif
 
 // Build ID (set by CI/CD or build script, e.g. git short hash)
 // Override via compiler flag: -DFW_BUILD_ID=\"abc1234\"
 // Format: YYYYMMDD-HHMMSS (serial number)
 #ifndef FW_BUILD_ID
-#define FW_BUILD_ID "20261107-201127"
+#define FW_BUILD_ID "20261127-144120"
 #endif
 
 namespace BuildInfo {

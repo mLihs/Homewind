@@ -79,6 +79,8 @@ public:
 
   // Download job could not be enqueued: no rollback, the loop may already quiesce.
   void failAdmission() {
+    _failedStep.store(static_cast<uint8_t>(MaintState::REQUESTED));
+    _failedElapsedMs.store(0);
     _state.store(static_cast<uint8_t>(MaintState::FAILED));
     finish(MaintResult::FAILED);
   }
@@ -118,26 +120,27 @@ public:
         return;
       }
       _discoveryWasOpen = port.quiesceBle();
-      if (nowMs - _requestedAtMs > kRequestedMs) {
-        fail(port);
+      // Request may see a later millis() than this tick (other task) → clamp.
+      if (elapsedSince(nowMs, _requestedAtMs) > kRequestedMs) {
+        fail(port, nowMs);
         return;
       }
       enterStep(MaintState::STOPPING_DISCOVERY, nowMs);
     }
-    if (nowMs - _requestedAtMs > kTotalMs) {
-      fail(port);
+    if (elapsedSince(nowMs, _requestedAtMs) > kTotalMs) {
+      fail(port, nowMs);
       return;
     }
     if (state() == MaintState::STOPPING_DISCOVERY) {
       if (_discoveryWasOpen && !port.discoveryDoneSeen()) {
-        if (nowMs - _stepStartMs > kDiscoveryMs) fail(port);
+        if (elapsedSince(nowMs, _stepStartMs) > kDiscoveryMs) fail(port, nowMs);
         return;
       }
       enterStep(MaintState::STOPPING_SCANS, nowMs);
     }
     if (state() == MaintState::STOPPING_SCANS) {
       if (!port.bleQuiesced()) {
-        if (nowMs - _stepStartMs > _scansMs) fail(port);
+        if (elapsedSince(nowMs, _stepStartMs) > _scansMs) fail(port, nowMs);
         return;
       }
       enterStep(MaintState::REMOVING, nowMs);
@@ -146,7 +149,7 @@ public:
       if (port.removeSensors()) {
         ack(port);
       } else {
-        fail(port);
+        fail(port, nowMs);
       }
     }
   }
@@ -154,6 +157,10 @@ public:
   MaintState state() const { return static_cast<MaintState>(_state.load()); }
   MaintReason reason() const { return static_cast<MaintReason>(_reason.load()); }
   MaintResult result() const { return static_cast<MaintResult>(_result.load()); }
+  /** Step that was active when result became FAILED (else IDLE). */
+  MaintState failedStep() const { return static_cast<MaintState>(_failedStep.load()); }
+  /** Elapsed ms from request to failure (0 if not FAILED). */
+  uint32_t failedElapsedMs() const { return _failedElapsedMs.load(); }
   bool admissionClosed() const { return state() != MaintState::IDLE; }
   bool restartRequired() const { return _restartRequired.load(); }
   void setRestartRequired() { _restartRequired.store(true); }
@@ -188,6 +195,14 @@ private:
   uint32_t _requestedAtMs = 0;
   uint32_t _stepStartMs = 0;
   bool _discoveryWasOpen = false;
+  std::atomic<uint8_t> _failedStep{static_cast<uint8_t>(MaintState::IDLE)};
+  std::atomic<uint32_t> _failedElapsedMs{0};
+
+  /** Unsigned millis delta; if start is slightly ahead of now (cross-task), 0. */
+  static uint32_t elapsedSince(uint32_t nowMs, uint32_t startMs) {
+    const int32_t d = static_cast<int32_t>(nowMs - startMs);
+    return d < 0 ? 0u : static_cast<uint32_t>(d);
+  }
 
   MaintAdmit admitLocked(MaintReason reason, uint32_t nowMs) {
     if (state() != MaintState::IDLE) {
@@ -195,6 +210,8 @@ private:
     }
     _reason.store(static_cast<uint8_t>(reason));
     _result.store(static_cast<uint8_t>(MaintResult::PENDING));
+    _failedStep.store(static_cast<uint8_t>(MaintState::IDLE));
+    _failedElapsedMs.store(0);
     _requestedAtMs = nowMs;
     _state.store(static_cast<uint8_t>(MaintState::REQUESTED));
     return MaintAdmit::ACCEPTED;
@@ -219,8 +236,12 @@ private:
     finish(MaintResult::ACK);
   }
 
-  void fail(MaintPort& port) {
+  void fail(MaintPort& port, uint32_t nowMs) {
     port.discardQueues();
+    if (result() == MaintResult::PENDING) {
+      _failedStep.store(static_cast<uint8_t>(state()));
+      _failedElapsedMs.store(elapsedSince(nowMs, _requestedAtMs));
+    }
     _state.store(static_cast<uint8_t>(MaintState::FAILED));
     finish(MaintResult::FAILED);
   }
