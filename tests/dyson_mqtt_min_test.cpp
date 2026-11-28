@@ -75,6 +75,8 @@ static void testConnectWith88CharPassword() {
   CHECK(rem > 127);  // forces multi-byte remaining length
   CHECK(pos == 3);   // 1 type + 2 length bytes for values 128..16383
   CHECK(1 + (pos - 1) + rem == n);
+  CHECK(pkt[pos + 6] == 4);     // protocol level 3.1.1
+  CHECK(pkt[pos + 7] == 0xC2);  // user + password + clean session (TP09: CONNACK 3 without)
 
   // Client id must fit MQTT 3.1 limit habitually used on Dyson (≤23)
   CHECK(std::strlen("hw-aabbccdd-0") <= 23);

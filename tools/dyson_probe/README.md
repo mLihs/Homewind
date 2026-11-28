@@ -46,7 +46,7 @@ Expect: `CONNACK 0`, then `PUBACK` for each publish. Broker log shows `fnsp`.
 wifi …
 host <fan-ip> 1883          # or discover via mDNS later
 serial <SN from sticker>
-product <e.g. 438>
+product <e.g. 438E>         # type from the account (opendyson), NOT the mDNS prefix
 sticker <sticker password>  # or: cred <88-char local password>
 client hw-deadbeef-0        # keep stable across reboots (≤23 chars)
 connect
@@ -55,6 +55,10 @@ stage 1
 ```
 
 Link-era models may need `fmod` instead of `fpwr` — note what works in the P0 log.
+
+TP09 (2026-11-28): mDNS says `438`, but only `438E/…` works. A wrong product
+type still gets PUBACK — check the fan display, not the log. The fan also
+needs the clean-session flag in CONNECT (`CONNACK 3` without).
 
 ## Pass checklist
 
@@ -67,7 +71,7 @@ Link-era models may need `fmod` instead of `fpwr` — note what works in the P0 
 | `disc` then reconnect same client id | |
 | 10× probe reboot (fake `--pool 3` without replace would fail; with replace should live) | |
 | `heap` before/after 1 connection | |
-| Real TP07 / PH (if available) | |
+| Real TP07 / PH (if available) | TP09 OK 2026-11-28 (`cred`, `438E`); PH open |
 
 ## Host tests (no board)
 

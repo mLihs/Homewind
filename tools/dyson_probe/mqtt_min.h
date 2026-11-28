@@ -67,7 +67,7 @@ inline size_t buildConnect(uint8_t* out, size_t cap, const char* clientId,
   v += putStr(vh, sizeof(vh), v, "MQTT");
   if (v == 0 || v + 4 > sizeof(vh)) return 0;
   vh[v++] = 4;     // level 3.1.1
-  vh[v++] = 0xC0;  // username + password
+  vh[v++] = 0xC2;  // username + password + clean session (Dyson: CONNACK 3 without)
   vh[v++] = (uint8_t)((keepaliveSec >> 8) & 0xff);
   vh[v++] = (uint8_t)(keepaliveSec & 0xff);
   size_t a = putStr(vh, sizeof(vh), v, clientId);
