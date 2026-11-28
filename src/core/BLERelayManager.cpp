@@ -138,6 +138,8 @@ BLERelayManager::BLERelayManager()
   memset(&_trainerPending, 0, sizeof(_trainerPending));
   _trainerSetupScan = false;
   _trainerPowerNew = false;
+  _trainerSpeedDkmh = 0;
+  _trainerSpeedValid = false;
 #endif
 }
 
@@ -177,6 +179,7 @@ bool BLERelayManager::begin() {
   BikeSensor::setPowerCallback(staticOnPower);
 #if HW_ENABLE_TRAINER_MIRROR
   BikeSensor::setTrainerPowerCallback(staticOnTrainerPower);
+  BikeSensor::setTrainerDataCallback(staticOnTrainerData);
 #endif
   if (!BikeSensor::begin("homewind", kAllTypes, BikeSensor::Mode::MAC)) {
     HW_ERROR_PRINTLN("[BLE] BikeSensor::begin() failed");
@@ -1122,8 +1125,15 @@ void BLERelayManager::updateBikeMetrics() {
   bool powerValid = BikeSensor::lastPower(power, powerAgeMs);
   BikeSensor::PowerSample trainerSample{};
   uint32_t trainerAgeMs = 0;
+  // Like the trainer power, the wheel speed ends with the ready link.
+  const bool trainerLive = BikeSensor::trainerPower(trainerSample, trainerAgeMs);
+  if (!trainerLive) {
+    _trainerWheel = hw::WheelSpeed{};
+  }
+  _trainerSpeedDkmh = hw::wheelSpeedDkmh(_trainerWheel, _bikeMetricsMs);
+  _trainerSpeedValid = _trainerWheel.valid;
   const bool fromTrainer = hw::bikePowerFromTrainer(BikeSensor::connected(BikeSensor::SensorType::POWER),
-                                                    BikeSensor::trainerPower(trainerSample, trainerAgeMs));
+                                                    trainerLive);
   if (fromTrainer) {
     power = trainerSample;
     powerAgeMs = trainerAgeMs;
@@ -1262,6 +1272,12 @@ void BLERelayManager::staticOnTrainerPower(const BikeSensor::PowerSample&) {
   BLERelayManager* self = _instance;
   if (!self) return;
   self->_trainerPowerNew = true;
+}
+
+void BLERelayManager::staticOnTrainerData(uint16_t uuid16, const uint8_t* data, uint8_t len) {
+  BLERelayManager* self = _instance;
+  if (!self || uuid16 != 0x2A63) return;
+  hw::wheelSpeedUpdate(self->_trainerWheel, data, len, millis());
 }
 
 void BLERelayManager::markTrainerDirty() {

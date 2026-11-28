@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.5.0] - 2026-11-28
+
+Trainer speed for the Karoo app.
+
+### Added
+- `GET /api/v1/state`: `speed=<0.1 km/h>,<valid>` (#23, for the Karoo app). Trainer wheel speed from the mirrored trainer's Cycling Power Measurement `0x2A63` wheel revolutions times a fixed 2096 mm, like the Wahoo app; `0` after 3 s without a wheel event, `0,0` until the trainer has sent wheel data and again when the trainer link drops. Packets without wheel data are ignored; a counter restart on a live link only sets a new baseline. New `src/core/TrainerSpeed.h` (Arduino-free) and `tests/trainer_speed_test.cpp` (field offsets, speed, counter wrap, pause, reconnect, counter restart, packets without wheel data).
+
 ## [2.4.0] - 2026-11-27
 
 Fan stack P1 (Xiaomi via FanCommon) and HR range limit state on Touch / WebSocket.

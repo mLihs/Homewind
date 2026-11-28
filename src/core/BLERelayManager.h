@@ -24,6 +24,7 @@
 #include <BikeSensor.h>
 #include <Preferences.h>
 #include "BikeMetrics.h"
+#include "TrainerSpeed.h"
 #include "BleCommandState.h"
 #include "BleNvsBlob.h"
 
@@ -166,6 +167,9 @@ public:
   BleEnqueueResult enqueueTrainerEnable(bool on);
   BleEnqueueResult enqueueTrainerForget();
   void trainerStatus(TrainerStatus& out);
+  // Speed from the trainer's wheel data (TrainerSpeed.h), latched with
+  // bikeMetrics(); false until the trainer has sent wheel data on the ready link.
+  bool trainerSpeed(uint16_t& dkmh) const { dkmh = _trainerSpeedDkmh; return _trainerSpeedValid; }
 #endif
 
   // ---- Loop task ----------------------------------------------------------
@@ -297,8 +301,12 @@ private:
   TrainerDev _trainerPending;        // the running setup
   bool _trainerSetupScan;            // the next DISCOVERY_DONE is the setup's
   bool _trainerPowerNew;
+  hw::WheelSpeed _trainerWheel;      // loop task only
+  uint16_t _trainerSpeedDkmh;
+  bool _trainerSpeedValid;
   void markTrainerDirty();
   static void staticOnTrainerPower(const BikeSensor::PowerSample& sample);
+  static void staticOnTrainerData(uint16_t uuid16, const uint8_t* data, uint8_t len);
   void slotMacsLocked(const char* out[hw::kBleSlots]) const;
   hw::BleDeviceRule sensorRule(const HwDiscoveredSensor& rec, uint8_t requestedMask);
   BleEnqueueResult trainerSetupCheck(const char* mac, uint8_t& removeMask);

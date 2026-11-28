@@ -552,6 +552,7 @@ pwr_sensor=1|0|-
 csc_sensor=1|0|-
 power=<W>,<valid>,<from_trainer>
 cadence=<rpm>,<valid>,<from_power_meter>
+speed=<0.1 km/h>,<valid>     # since 2.5: trainer wheel speed, e.g. 325,1 = 32.5 km/h
 trainer=<state>,<mirror>     # TrainerState 0..6, mirror 0|1
 apps=<central count>
 hr_name=...
@@ -560,6 +561,8 @@ csc_name=...
 trainer_name=...
 ```
 `*_sensor`: `1` connected, `0` disconnected, `-` not configured. Names are last (value to EOL). `effective` is the running mode (Hybrid without power/span becomes Smart). `limit`: plus lowers the range, minus raises it; `min`/`max` when a ±5 bpm step would cross 50/200.
+
+`speed` (since 2.5): the mirrored trainer's wheel revolutions from Cycling Power Measurement `0x2A63`, times a fixed 2096 mm (700x23c), like the Wahoo app. It depends on the gear and is not the Zwift speed (Zwift computes its own from power). `valid` is `1` once the trainer has sent wheel data on the current link and `0` again when the link drops (like the trainer's `power`); the value is `0` after 3 s without a new wheel event. `0,0` without a trainer mirror or wheel data. Older firmware has no `speed` line; clients ignore unknown keys and extra fields.
 
 ---
 

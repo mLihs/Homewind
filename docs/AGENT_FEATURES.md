@@ -19,12 +19,13 @@ Rules
   and must not change the Basic build unless intended.
 - Measure heap (`t`/`h`, `HEAP_BENCHMARK.md`) before and after each feature.
 
-## Current state (verified 2026-11-27, Homewind 2.4.0, BikeSensor 3.3.4)
+## Current state (verified 2026-11-28, Homewind 2.5.0, BikeSensor 3.3.4)
 
 - **Shipped since 1.8.1:** Network identity 2.2.0; Karoo HTTP API 2.3.0
   (`/api/v1/state`, `fan/step`, `fanmode/cycle`); Fan modes Pure/Smart/Hybrid
   (1.8.0); **2.4.0** Fans P1 (FanCommon/SMA 3.0/FanBus) + HR ± inactive at
-  50/200 (`HEART_RATE_SETTINGS` flags; HomeWindWSAmoled **1.8.0**).
+  50/200 (`HEART_RATE_SETTINGS` flags; HomeWindWSAmoled **1.8.0**); **2.5.0**
+  trainer wheel speed `speed=` in `/api/v1/state` (`TrainerSpeed.h`).
 - **Trainer mirror (release builds from 2.0):** Homewind can mirror a smart
   trainer to apps (CPS + Tacx FE-C over BLE as needed). This is **not** an
   FTMS control proxy — apps still do not get ERG/simulation *through*

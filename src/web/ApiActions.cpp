@@ -1474,6 +1474,8 @@ void ApiActions::handleState(AsyncWebServerRequest* request) {
 
   uint8_t trainerState = 0;
   uint8_t trainerMirror = 0;
+  uint16_t speedDkmh = 0;
+  uint8_t speedValid = 0;
   char trainerName[32];
   trainerName[0] = '\0';
 #if HW_ENABLE_TRAINER_MIRROR
@@ -1484,6 +1486,7 @@ void ApiActions::handleState(AsyncWebServerRequest* request) {
     trainerMirror = ts.mirror ? 1 : 0;
     strncpy(trainerName, ts.name, sizeof(trainerName) - 1);
     trainerName[sizeof(trainerName) - 1] = '\0';
+    speedValid = g_bleRelayManager->trainerSpeed(speedDkmh) ? 1 : 0;
   }
 #endif
 
@@ -1496,7 +1499,7 @@ void ApiActions::handleState(AsyncWebServerRequest* request) {
                "v=1\nmode=%s\neffective=%s\nfan_pct=%u\nfans=%s\n"
                "hr=%u\nhr_min=%u\nhr_max=%u\nftp=%u\nlimit=%s\n"
                "hr_sensor=%c\npwr_sensor=%c\ncsc_sensor=%c\n"
-               "power=%d,%u,%u\ncadence=%u,%u,%u\n"
+               "power=%d,%u,%u\ncadence=%u,%u,%u\nspeed=%u,%u\n"
                "trainer=%u,%u\napps=%u\n",
                modeName(mode), modeName(effective), static_cast<unsigned>(fanPct), fans,
                static_cast<unsigned>(hr), static_cast<unsigned>(hrMin),
@@ -1506,6 +1509,7 @@ void ApiActions::handleState(AsyncWebServerRequest* request) {
                static_cast<unsigned>(powerFromTrainer),
                static_cast<unsigned>(cadenceRpm), static_cast<unsigned>(cadenceValid),
                static_cast<unsigned>(cadenceFromPower),
+               static_cast<unsigned>(speedDkmh), static_cast<unsigned>(speedValid),
                static_cast<unsigned>(trainerState), static_cast<unsigned>(trainerMirror),
                static_cast<unsigned>(apps))) {
     truncated = true;
